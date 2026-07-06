@@ -86,9 +86,11 @@ function Library:CreateWindow(config)
     stroke(Main, Theme.Stroke, 1)
 
     -- Top bar (draggable)
+    local TOPBAR_HEIGHT = subtitle ~= "" and 58 or 46
+
     local TopBar = Instance.new("Frame")
     TopBar.Name = "TopBar"
-    TopBar.Size = UDim2.new(1, 0, 0, 46)
+    TopBar.Size = UDim2.new(1, 0, 0, TOPBAR_HEIGHT)
     TopBar.BackgroundColor3 = Theme.Section
     TopBar.BorderSizePixel = 0
     TopBar.Parent = Main
@@ -105,19 +107,22 @@ function Library:CreateWindow(config)
 
     local TitleLabel = Instance.new("TextLabel")
     TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Position = UDim2.new(0, 16, 0, 0)
-    TitleLabel.Size = UDim2.new(1, -80, 1, 0)
     TitleLabel.Font = Enum.Font.GothamBold
     TitleLabel.Text = title
     TitleLabel.TextColor3 = Theme.Text
     TitleLabel.TextSize = 16
     TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    TitleLabel.TextYAlignment = Enum.TextYAlignment.Center
     TitleLabel.Parent = TopBar
 
     if subtitle ~= "" then
+        -- Title sits in the top half, subtitle underneath it
+        TitleLabel.Position = UDim2.new(0, 16, 0, 6)
+        TitleLabel.Size = UDim2.new(1, -80, 0, 20)
+
         local SubLabel = Instance.new("TextLabel")
         SubLabel.BackgroundTransparency = 1
-        SubLabel.Position = UDim2.new(0, 16, 0, 20)
+        SubLabel.Position = UDim2.new(0, 16, 0, 28)
         SubLabel.Size = UDim2.new(1, -80, 0, 16)
         SubLabel.Font = Enum.Font.Gotham
         SubLabel.Text = subtitle
@@ -125,12 +130,16 @@ function Library:CreateWindow(config)
         SubLabel.TextSize = 12
         SubLabel.TextXAlignment = Enum.TextXAlignment.Left
         SubLabel.Parent = TopBar
+    else
+        -- No subtitle: title is vertically centered in the whole bar
+        TitleLabel.Position = UDim2.new(0, 16, 0, 0)
+        TitleLabel.Size = UDim2.new(1, -80, 1, 0)
     end
 
     -- Close button
     local CloseBtn = Instance.new("TextButton")
     CloseBtn.Size = UDim2.new(0, 30, 0, 30)
-    CloseBtn.Position = UDim2.new(1, -38, 0, 8)
+    CloseBtn.Position = UDim2.new(1, -38, 0, TOPBAR_HEIGHT / 2 - 15)
     CloseBtn.BackgroundColor3 = Theme.ToggleOff
     CloseBtn.Text = "×"
     CloseBtn.TextColor3 = Theme.Text
@@ -145,7 +154,7 @@ function Library:CreateWindow(config)
     -- Minimize toggle (optional, small nicety)
     local MinBtn = Instance.new("TextButton")
     MinBtn.Size = UDim2.new(0, 30, 0, 30)
-    MinBtn.Position = UDim2.new(1, -74, 0, 8)
+    MinBtn.Position = UDim2.new(1, -74, 0, TOPBAR_HEIGHT / 2 - 15)
     MinBtn.BackgroundColor3 = Theme.ToggleOff
     MinBtn.Text = "–"
     MinBtn.TextColor3 = Theme.Text
@@ -157,8 +166,8 @@ function Library:CreateWindow(config)
     -- Scrolling container for sections
     local Container = Instance.new("ScrollingFrame")
     Container.Name = "Container"
-    Container.Position = UDim2.new(0, 12, 0, 56)
-    Container.Size = UDim2.new(1, -24, 1, -68)
+    Container.Position = UDim2.new(0, 12, 0, TOPBAR_HEIGHT + 10)
+    Container.Size = UDim2.new(1, -24, 1, -(TOPBAR_HEIGHT + 22))
     Container.BackgroundTransparency = 1
     Container.BorderSizePixel = 0
     Container.ScrollBarThickness = 4
@@ -176,7 +185,7 @@ function Library:CreateWindow(config)
     MinBtn.MouseButton1Click:Connect(function()
         minimized = not minimized
         Container.Visible = not minimized
-        tween(Main, { Size = minimized and UDim2.new(0, 480, 0, 46) or UDim2.new(0, 480, 0, 360) }, 0.2)
+        tween(Main, { Size = minimized and UDim2.new(0, 480, 0, TOPBAR_HEIGHT) or UDim2.new(0, 480, 0, 360) }, 0.2)
     end)
 
     -- Dragging
@@ -213,14 +222,130 @@ function Library:CreateWindow(config)
         end
     end)
 
+    -- Notification holder (stacks toasts in the top-right of the screen)
+    local NotifyHolder = Instance.new("Frame")
+    NotifyHolder.Name = "NotifyHolder"
+    NotifyHolder.BackgroundTransparency = 1
+    NotifyHolder.AnchorPoint = Vector2.new(1, 0)
+    NotifyHolder.Position = UDim2.new(1, -16, 0, 16)
+    NotifyHolder.Size = UDim2.new(0, 280, 1, -32)
+    NotifyHolder.Parent = ScreenGui
+
+    local NotifyLayout = Instance.new("UIListLayout")
+    NotifyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    NotifyLayout.Padding = UDim.new(0, 8)
+    NotifyLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
+    NotifyLayout.Parent = NotifyHolder
+
     local Window = setmetatable({
         ScreenGui = ScreenGui,
         Main = Main,
         Container = Container,
+        NotifyHolder = NotifyHolder,
         _order = 0,
+        _notifyOrder = 0,
     }, Library)
 
     return Window
+end
+
+-- ===== NOTIFICATIONS =====
+-- Window:Notify({ Title = "...", Text = "...", Duration = 4, Type = "Info"/"Success"/"Warning"/"Error" })
+-- Also callable as Window:Notify("Title", "Text", 4)
+function Library:Notify(a, b, c)
+    local title, text, duration, notifType
+
+    if type(a) == "table" then
+        title = a.Title or "Notification"
+        text = a.Text or ""
+        duration = a.Duration or 4
+        notifType = a.Type or "Info"
+    else
+        title = a or "Notification"
+        text = b or ""
+        duration = c or 4
+        notifType = "Info"
+    end
+
+    local TypeColors = {
+        Info = Theme.Accent,
+        Success = Color3.fromRGB(80, 200, 120),
+        Warning = Color3.fromRGB(230, 180, 60),
+        Error = Color3.fromRGB(230, 90, 90),
+    }
+    local accentColor = TypeColors[notifType] or Theme.Accent
+
+    self._notifyOrder = self._notifyOrder + 1
+
+    local Toast = Instance.new("Frame")
+    Toast.LayoutOrder = self._notifyOrder
+    Toast.Size = UDim2.new(1, 0, 0, 0)
+    Toast.AutomaticSize = Enum.AutomaticSize.Y
+    Toast.BackgroundColor3 = Theme.Section
+    Toast.BorderSizePixel = 0
+    Toast.ClipsDescendants = true
+    Toast.Parent = self.NotifyHolder
+    corner(Toast, 8)
+    stroke(Toast, Theme.Stroke, 1)
+
+    -- Colored accent bar on the left
+    local AccentBar = Instance.new("Frame")
+    AccentBar.Size = UDim2.new(0, 4, 1, 0)
+    AccentBar.BackgroundColor3 = accentColor
+    AccentBar.BorderSizePixel = 0
+    AccentBar.Parent = Toast
+    corner(AccentBar, 2)
+
+    local Padding = Instance.new("UIPadding")
+    Padding.PaddingTop = UDim.new(0, 10)
+    Padding.PaddingBottom = UDim.new(0, 10)
+    Padding.PaddingLeft = UDim.new(0, 16)
+    Padding.PaddingRight = UDim.new(0, 12)
+    Padding.Parent = Toast
+
+    local TitleLabel = Instance.new("TextLabel")
+    TitleLabel.BackgroundTransparency = 1
+    TitleLabel.Size = UDim2.new(1, 0, 0, 18)
+    TitleLabel.Font = Enum.Font.GothamBold
+    TitleLabel.Text = title
+    TitleLabel.TextColor3 = Theme.Text
+    TitleLabel.TextSize = 13
+    TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    TitleLabel.Parent = Toast
+
+    local TextLabel = Instance.new("TextLabel")
+    TextLabel.BackgroundTransparency = 1
+    TextLabel.Position = UDim2.new(0, 0, 0, 18)
+    TextLabel.Size = UDim2.new(1, 0, 0, 0)
+    TextLabel.AutomaticSize = Enum.AutomaticSize.Y
+    TextLabel.Font = Enum.Font.Gotham
+    TextLabel.Text = text
+    TextLabel.TextColor3 = Theme.SubText
+    TextLabel.TextSize = 12
+    TextLabel.TextWrapped = true
+    TextLabel.TextXAlignment = Enum.TextXAlignment.Left
+    TextLabel.Parent = Toast
+
+    -- Slide in from the right + fade in
+    Toast.Position = UDim2.new(1, 40, 0, 0)
+    Toast.BackgroundTransparency = 1
+    AccentBar.BackgroundTransparency = 1
+    TitleLabel.TextTransparency = 1
+    TextLabel.TextTransparency = 1
+
+    tween(Toast, { Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 0 }, 0.2)
+    tween(AccentBar, { BackgroundTransparency = 0 }, 0.2)
+    tween(TitleLabel, { TextTransparency = 0 }, 0.2)
+    tween(TextLabel, { TextTransparency = 0 }, 0.2)
+
+    task.delay(duration, function()
+        tween(Toast, { Position = UDim2.new(1, 40, 0, 0), BackgroundTransparency = 1 }, 0.2)
+        tween(AccentBar, { BackgroundTransparency = 1 }, 0.2)
+        tween(TitleLabel, { TextTransparency = 1 }, 0.2)
+        tween(TextLabel, { TextTransparency = 1 }, 0.2)
+        task.wait(0.25)
+        Toast:Destroy()
+    end)
 end
 
 -- ===== SECTION =====
