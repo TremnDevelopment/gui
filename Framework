@@ -2,19 +2,26 @@
     Custom GUI Library
     ------------------
     A lightweight, draggable settings-style GUI for Roblox with:
-      - Toggles
-      - Sliders
-      - Buttons
-      - Dropdowns
-      - A section/tab system
+      - Tabs, with a built-in "Settings" tab (active by default)
+      - Sections
+      - Toggles, Sliders, Buttons, Dropdowns, Color Pickers
+      - Toast notifications with a customizable screen position
+      - Live-customizable accent color (applies everywhere instantly)
 
     HOW TO USE:
-    1. Put this in a LocalScript (e.g. StarterPlayerScripts).
+    1. Put this in a LocalScript (e.g. StarterPlayerScripts), or require it
+       as a ModuleScript from ReplicatedStorage.
     2. Call Library:CreateWindow(...) to make a window.
-    3. Add sections/toggles/sliders/etc.
+    3. Call Window:CreateTab(...) to add tabs, then :CreateSection(...) on
+       the tab to add a panel, then add toggles/sliders/etc to the section.
     4. Each element takes a callback function — that's where YOU plug in
-       your own feature logic. Placeholder functions are provided below
-       as examples (they just print to output).
+       your own feature logic. Placeholder functions are provided in
+       Example_Usage.lua (they just print to output).
+
+    A "Settings" tab is created automatically and is selected by default.
+    It contains:
+      - Notification Position (dropdown: which corner toasts appear in)
+      - UI Color (R/G/B sliders that recolor the whole GUI's accent live)
 ]]
 
 local Players = game:GetService("Players")
@@ -28,6 +35,8 @@ local Library = {}
 Library.__index = Library
 
 -- ===== THEME =====
+-- Static base colors. `Colors.Accent` (below) is the one live-customizable
+-- color; everything that uses it stays in sync when it changes.
 local Theme = {
     Background   = Color3.fromRGB(24, 24, 28),
     Section      = Color3.fromRGB(32, 32, 38),
@@ -38,6 +47,21 @@ local Theme = {
     Stroke       = Color3.fromRGB(50, 50, 58),
 }
 
+-- Live, mutable colors. Elements read Colors.Accent (not Theme.Accent) so
+-- that changing it at runtime is reflected the next time anything reads it.
+local Colors = {
+    Accent = Theme.Accent,
+}
+
+-- Elements that need to visually update the instant the accent color
+-- changes (not just next time they're interacted with) register a
+-- listener here via onAccentChanged(fn).
+local AccentListeners = {}
+local function onAccentChanged(fn)
+    table.insert(AccentListeners, fn)
+end
+
+-- ===== HELPERS =====
 local function tween(obj, props, time)
     time = time or 0.15
     TweenService:Create(obj, TweenInfo.new(time, Enum.EasingStyle.Quad), props):Play()
@@ -58,335 +82,54 @@ local function stroke(parent, color, thickness)
     return s
 end
 
--- ===== WINDOW =====
-function Library:CreateWindow(config)
-    config = config or {}
-    local title = config.Title or "Settings"
-    local subtitle = config.Subtitle or ""
+-- ===== NOTIFICATION POSITION PRESETS =====
+local NotifyPositions = {
+    ["Top Right"] = {
+        anchor = Vector2.new(1, 0), position = UDim2.new(1, -16, 0, 16),
+        hAlign = Enum.HorizontalAlignment.Right, vAlign = Enum.VerticalAlignment.Top,
+    },
+    ["Top Left"] = {
+        anchor = Vector2.new(0, 0), position = UDim2.new(0, 16, 0, 16),
+        hAlign = Enum.HorizontalAlignment.Left, vAlign = Enum.VerticalAlignment.Top,
+    },
+    ["Top Center"] = {
+        anchor = Vector2.new(0.5, 0), position = UDim2.new(0.5, 0, 0, 16),
+        hAlign = Enum.HorizontalAlignment.Center, vAlign = Enum.VerticalAlignment.Top,
+    },
+    ["Bottom Right"] = {
+        anchor = Vector2.new(1, 1), position = UDim2.new(1, -16, 1, -16),
+        hAlign = Enum.HorizontalAlignment.Right, vAlign = Enum.VerticalAlignment.Bottom,
+    },
+    ["Bottom Left"] = {
+        anchor = Vector2.new(0, 1), position = UDim2.new(0, 16, 1, -16),
+        hAlign = Enum.HorizontalAlignment.Left, vAlign = Enum.VerticalAlignment.Bottom,
+    },
+    ["Bottom Center"] = {
+        anchor = Vector2.new(0.5, 1), position = UDim2.new(0.5, 0, 1, -16),
+        hAlign = Enum.HorizontalAlignment.Center, vAlign = Enum.VerticalAlignment.Bottom,
+    },
+}
+local NOTIFY_POSITION_NAMES = {
+    "Top Right", "Top Left", "Top Center", "Bottom Right", "Bottom Left", "Bottom Center",
+}
+local DEFAULT_NOTIFY_POSITION = "Top Right"
 
-    -- Remove old instance if it exists (handy for re-running the script)
-    local existing = PlayerGui:FindFirstChild("CustomGUI_ScreenGui")
-    if existing then existing:Destroy() end
-
-    local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "CustomGUI_ScreenGui"
-    ScreenGui.ResetOnSpawn = false
-    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    ScreenGui.Parent = PlayerGui
-
-    local Main = Instance.new("Frame")
-    Main.Name = "Main"
-    Main.Size = UDim2.new(0, 480, 0, 360)
-    Main.Position = UDim2.new(0.5, -240, 0.5, -180)
-    Main.BackgroundColor3 = Theme.Background
-    Main.BorderSizePixel = 0
-    Main.Active = true
-    Main.Parent = ScreenGui
-    corner(Main, 10)
-    stroke(Main, Theme.Stroke, 1)
-
-    -- Top bar (draggable)
-    local TOPBAR_HEIGHT = subtitle ~= "" and 58 or 46
-
-    local TopBar = Instance.new("Frame")
-    TopBar.Name = "TopBar"
-    TopBar.Size = UDim2.new(1, 0, 0, TOPBAR_HEIGHT)
-    TopBar.BackgroundColor3 = Theme.Section
-    TopBar.BorderSizePixel = 0
-    TopBar.Parent = Main
-    corner(TopBar, 10)
-
-    -- Cover bottom corners of topbar so it looks flush with Main
-    local TopBarFix = Instance.new("Frame")
-    TopBarFix.Size = UDim2.new(1, 0, 0, 10)
-    TopBarFix.Position = UDim2.new(0, 0, 1, -10)
-    TopBarFix.BackgroundColor3 = Theme.Section
-    TopBarFix.BorderSizePixel = 0
-    TopBarFix.ZIndex = 0
-    TopBarFix.Parent = TopBar
-
-    local TitleLabel = Instance.new("TextLabel")
-    TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Font = Enum.Font.GothamBold
-    TitleLabel.Text = title
-    TitleLabel.TextColor3 = Theme.Text
-    TitleLabel.TextSize = 16
-    TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-    TitleLabel.TextYAlignment = Enum.TextYAlignment.Center
-    TitleLabel.Parent = TopBar
-
-    if subtitle ~= "" then
-        -- Title sits in the top half, subtitle underneath it
-        TitleLabel.Position = UDim2.new(0, 16, 0, 6)
-        TitleLabel.Size = UDim2.new(1, -80, 0, 20)
-
-        local SubLabel = Instance.new("TextLabel")
-        SubLabel.BackgroundTransparency = 1
-        SubLabel.Position = UDim2.new(0, 16, 0, 28)
-        SubLabel.Size = UDim2.new(1, -80, 0, 16)
-        SubLabel.Font = Enum.Font.Gotham
-        SubLabel.Text = subtitle
-        SubLabel.TextColor3 = Theme.SubText
-        SubLabel.TextSize = 12
-        SubLabel.TextXAlignment = Enum.TextXAlignment.Left
-        SubLabel.Parent = TopBar
-    else
-        -- No subtitle: title is vertically centered in the whole bar
-        TitleLabel.Position = UDim2.new(0, 16, 0, 0)
-        TitleLabel.Size = UDim2.new(1, -80, 1, 0)
-    end
-
-    -- Close button
-    local CloseBtn = Instance.new("TextButton")
-    CloseBtn.Size = UDim2.new(0, 30, 0, 30)
-    CloseBtn.Position = UDim2.new(1, -38, 0, TOPBAR_HEIGHT / 2 - 15)
-    CloseBtn.BackgroundColor3 = Theme.ToggleOff
-    CloseBtn.Text = "×"
-    CloseBtn.TextColor3 = Theme.Text
-    CloseBtn.Font = Enum.Font.GothamBold
-    CloseBtn.TextSize = 18
-    CloseBtn.Parent = TopBar
-    corner(CloseBtn, 6)
-    CloseBtn.MouseButton1Click:Connect(function()
-        ScreenGui.Enabled = false
-    end)
-
-    -- Minimize toggle (optional, small nicety)
-    local MinBtn = Instance.new("TextButton")
-    MinBtn.Size = UDim2.new(0, 30, 0, 30)
-    MinBtn.Position = UDim2.new(1, -74, 0, TOPBAR_HEIGHT / 2 - 15)
-    MinBtn.BackgroundColor3 = Theme.ToggleOff
-    MinBtn.Text = "–"
-    MinBtn.TextColor3 = Theme.Text
-    MinBtn.Font = Enum.Font.GothamBold
-    MinBtn.TextSize = 18
-    MinBtn.Parent = TopBar
-    corner(MinBtn, 6)
-
-    -- Scrolling container for sections
-    local Container = Instance.new("ScrollingFrame")
-    Container.Name = "Container"
-    Container.Position = UDim2.new(0, 12, 0, TOPBAR_HEIGHT + 10)
-    Container.Size = UDim2.new(1, -24, 1, -(TOPBAR_HEIGHT + 22))
-    Container.BackgroundTransparency = 1
-    Container.BorderSizePixel = 0
-    Container.ScrollBarThickness = 4
-    Container.ScrollBarImageColor3 = Theme.Accent
-    Container.CanvasSize = UDim2.new(0, 0, 0, 0)
-    Container.AutomaticCanvasSize = Enum.AutomaticSize.Y
-    Container.Parent = Main
-
-    local Layout = Instance.new("UIListLayout")
-    Layout.Padding = UDim.new(0, 10)
-    Layout.SortOrder = Enum.SortOrder.LayoutOrder
-    Layout.Parent = Container
-
-    local minimized = false
-    MinBtn.MouseButton1Click:Connect(function()
-        minimized = not minimized
-        Container.Visible = not minimized
-        tween(Main, { Size = minimized and UDim2.new(0, 480, 0, TOPBAR_HEIGHT) or UDim2.new(0, 480, 0, 360) }, 0.2)
-    end)
-
-    -- Dragging
-    do
-        local dragging, dragStart, startPos
-        TopBar.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-                dragging = true
-                dragStart = input.Position
-                startPos = Main.Position
-                input.Changed:Connect(function()
-                    if input.UserInputState == Enum.UserInputState.End then
-                        dragging = false
-                    end
-                end)
-            end
-        end)
-        UserInputService.InputChanged:Connect(function(input)
-            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-                local delta = input.Position - dragStart
-                Main.Position = UDim2.new(
-                    startPos.X.Scale, startPos.X.Offset + delta.X,
-                    startPos.Y.Scale, startPos.Y.Offset + delta.Y
-                )
-            end
-        end)
-    end
-
-    -- Toggle GUI visibility with Right Shift (customizable)
-    UserInputService.InputBegan:Connect(function(input, gpe)
-        if gpe then return end
-        if input.KeyCode == Enum.KeyCode.RightShift then
-            ScreenGui.Enabled = not ScreenGui.Enabled
-        end
-    end)
-
-    -- Notification holder (stacks toasts in the top-right of the screen)
-    local NotifyHolder = Instance.new("Frame")
-    NotifyHolder.Name = "NotifyHolder"
-    NotifyHolder.BackgroundTransparency = 1
-    NotifyHolder.AnchorPoint = Vector2.new(1, 0)
-    NotifyHolder.Position = UDim2.new(1, -16, 0, 16)
-    NotifyHolder.Size = UDim2.new(0, 280, 1, -32)
-    NotifyHolder.Parent = ScreenGui
-
-    local NotifyLayout = Instance.new("UIListLayout")
-    NotifyLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    NotifyLayout.Padding = UDim.new(0, 8)
-    NotifyLayout.HorizontalAlignment = Enum.HorizontalAlignment.Right
-    NotifyLayout.Parent = NotifyHolder
-
-    local Window = setmetatable({
-        ScreenGui = ScreenGui,
-        Main = Main,
-        Container = Container,
-        NotifyHolder = NotifyHolder,
-        _order = 0,
-        _notifyOrder = 0,
-    }, Library)
-
-    return Window
-end
-
--- ===== NOTIFICATIONS =====
--- Window:Notify({ Title = "...", Text = "...", Duration = 4, Type = "Info"/"Success"/"Warning"/"Error" })
--- Also callable as Window:Notify("Title", "Text", 4)
-function Library:Notify(a, b, c)
-    local title, text, duration, notifType
-
-    if type(a) == "table" then
-        title = a.Title or "Notification"
-        text = a.Text or ""
-        duration = a.Duration or 4
-        notifType = a.Type or "Info"
-    else
-        title = a or "Notification"
-        text = b or ""
-        duration = c or 4
-        notifType = "Info"
-    end
-
-    local TypeColors = {
-        Info = Theme.Accent,
-        Success = Color3.fromRGB(80, 200, 120),
-        Warning = Color3.fromRGB(230, 180, 60),
-        Error = Color3.fromRGB(230, 90, 90),
-    }
-    local accentColor = TypeColors[notifType] or Theme.Accent
-
-    self._notifyOrder = self._notifyOrder + 1
-
-    local Toast = Instance.new("Frame")
-    Toast.LayoutOrder = self._notifyOrder
-    Toast.Size = UDim2.new(1, 0, 0, 0)
-    Toast.AutomaticSize = Enum.AutomaticSize.Y
-    Toast.BackgroundColor3 = Theme.Section
-    Toast.BorderSizePixel = 0
-    Toast.ClipsDescendants = true
-    Toast.Parent = self.NotifyHolder
-    corner(Toast, 8)
-    stroke(Toast, Theme.Stroke, 1)
-
-    -- Content holder: everything stacks inside via UIListLayout, so the
-    -- toast's AutomaticSize can correctly measure wrapped text height.
-    local Content = Instance.new("Frame")
-    Content.BackgroundTransparency = 1
-    Content.Size = UDim2.new(1, 0, 0, 0)
-    Content.AutomaticSize = Enum.AutomaticSize.Y
-    Content.Parent = Toast
-
-    local Padding = Instance.new("UIPadding")
-    Padding.PaddingTop = UDim.new(0, 10)
-    Padding.PaddingBottom = UDim.new(0, 10)
-    Padding.PaddingLeft = UDim.new(0, 14)
-    Padding.PaddingRight = UDim.new(0, 12)
-    Padding.Parent = Content
-
-    local ContentLayout = Instance.new("UIListLayout")
-    ContentLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    ContentLayout.Padding = UDim.new(0, 4)
-    ContentLayout.Parent = Content
-
-    -- Header row: a small colored dot next to the title
-    local HeaderRow = Instance.new("Frame")
-    HeaderRow.LayoutOrder = 1
-    HeaderRow.BackgroundTransparency = 1
-    HeaderRow.Size = UDim2.new(1, 0, 0, 16)
-    HeaderRow.Parent = Content
-
-    local HeaderLayout = Instance.new("UIListLayout")
-    HeaderLayout.FillDirection = Enum.FillDirection.Horizontal
-    HeaderLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-    HeaderLayout.Padding = UDim.new(0, 8)
-    HeaderLayout.Parent = HeaderRow
-
-    local Dot = Instance.new("Frame")
-    Dot.LayoutOrder = 1
-    Dot.Size = UDim2.new(0, 8, 0, 8)
-    Dot.BackgroundColor3 = accentColor
-    Dot.BorderSizePixel = 0
-    Dot.Parent = HeaderRow
-    corner(Dot, 4)
-
-    local TitleLabel = Instance.new("TextLabel")
-    TitleLabel.LayoutOrder = 2
-    TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Size = UDim2.new(1, -16, 1, 0)
-    TitleLabel.Font = Enum.Font.GothamBold
-    TitleLabel.Text = title
-    TitleLabel.TextColor3 = Theme.Text
-    TitleLabel.TextSize = 13
-    TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-    TitleLabel.Parent = HeaderRow
-
-    local TextLabel = Instance.new("TextLabel")
-    TextLabel.LayoutOrder = 2
-    TextLabel.BackgroundTransparency = 1
-    TextLabel.Size = UDim2.new(1, 0, 0, 0)
-    TextLabel.AutomaticSize = Enum.AutomaticSize.Y
-    TextLabel.Font = Enum.Font.Gotham
-    TextLabel.Text = text
-    TextLabel.TextColor3 = Theme.SubText
-    TextLabel.TextSize = 12
-    TextLabel.TextWrapped = true
-    TextLabel.TextXAlignment = Enum.TextXAlignment.Left
-    TextLabel.Parent = Content
-
-    -- Slide in from the right + fade in
-    Toast.Position = UDim2.new(1, 40, 0, 0)
-    Toast.BackgroundTransparency = 1
-    Dot.BackgroundTransparency = 1
-    TitleLabel.TextTransparency = 1
-    TextLabel.TextTransparency = 1
-
-    tween(Toast, { Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 0 }, 0.2)
-    tween(Dot, { BackgroundTransparency = 0 }, 0.2)
-    tween(TitleLabel, { TextTransparency = 0 }, 0.2)
-    tween(TextLabel, { TextTransparency = 0 }, 0.2)
-
-    task.delay(duration, function()
-        tween(Toast, { Position = UDim2.new(1, 40, 0, 0), BackgroundTransparency = 1 }, 0.2)
-        tween(Dot, { BackgroundTransparency = 1 }, 0.2)
-        tween(TitleLabel, { TextTransparency = 1 }, 0.2)
-        tween(TextLabel, { TextTransparency = 1 }, 0.2)
-        task.wait(0.25)
-        Toast:Destroy()
-    end)
-end
-
--- ===== SECTION =====
-function Library:CreateSection(name)
-    self._order = self._order + 1
+-- ===== SECTION BUILDER =====
+-- Shared by Window:CreateSection (legacy/simple usage) and Tab:CreateSection.
+-- `container` is the Frame sections get parented into.
+-- `orderState` is a small table with a `.count` field used to compute
+-- LayoutOrder, so each tab/window keeps its own independent ordering.
+local function buildSection(container, orderState, name)
+    orderState.count = (orderState.count or 0) + 1
 
     local Section = Instance.new("Frame")
     Section.Name = name
-    Section.LayoutOrder = self._order
+    Section.LayoutOrder = orderState.count
     Section.BackgroundColor3 = Theme.Section
     Section.BorderSizePixel = 0
     Section.Size = UDim2.new(1, 0, 0, 40) -- grows automatically
     Section.AutomaticSize = Enum.AutomaticSize.Y
-    Section.Parent = self.Container
+    Section.Parent = container
     corner(Section, 8)
 
     local Padding = Instance.new("UIPadding")
@@ -444,7 +187,7 @@ function Library:CreateSection(name)
         Switch.Text = ""
         Switch.Size = UDim2.new(0, 42, 0, 22)
         Switch.Position = UDim2.new(1, -42, 0.5, -11)
-        Switch.BackgroundColor3 = default and Theme.Accent or Theme.ToggleOff
+        Switch.BackgroundColor3 = default and Colors.Accent or Theme.ToggleOff
         Switch.Parent = Row
         corner(Switch, 11)
 
@@ -458,9 +201,15 @@ function Library:CreateSection(name)
         local state = default
         Switch.MouseButton1Click:Connect(function()
             state = not state
-            tween(Switch, { BackgroundColor3 = state and Theme.Accent or Theme.ToggleOff })
+            tween(Switch, { BackgroundColor3 = state and Colors.Accent or Theme.ToggleOff })
             tween(Knob, { Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9) })
             callback(state)
+        end)
+
+        onAccentChanged(function(color)
+            if state then
+                Switch.BackgroundColor3 = color
+            end
         end)
 
         if default then
@@ -470,7 +219,7 @@ function Library:CreateSection(name)
         return {
             Set = function(_, value)
                 state = value
-                Switch.BackgroundColor3 = state and Theme.Accent or Theme.ToggleOff
+                Switch.BackgroundColor3 = state and Colors.Accent or Theme.ToggleOff
                 Knob.Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
                 callback(state)
             end,
@@ -524,7 +273,7 @@ function Library:CreateSection(name)
         local Fill = Instance.new("Frame")
         local pct = (default - min) / (max - min)
         Fill.Size = UDim2.new(pct, 0, 1, 0)
-        Fill.BackgroundColor3 = Theme.Accent
+        Fill.BackgroundColor3 = Colors.Accent
         Fill.Parent = Track
         corner(Fill, 3)
 
@@ -535,6 +284,10 @@ function Library:CreateSection(name)
         Knob.ZIndex = 2
         Knob.Parent = Track
         corner(Knob, 7)
+
+        onAccentChanged(function(color)
+            Fill.BackgroundColor3 = color
+        end)
 
         local dragging = false
         local value = default
@@ -588,7 +341,7 @@ function Library:CreateSection(name)
         local Btn = Instance.new("TextButton")
         Btn.LayoutOrder = self._order
         Btn.Size = UDim2.new(1, 0, 0, 30)
-        Btn.BackgroundColor3 = Theme.Accent
+        Btn.BackgroundColor3 = Colors.Accent
         Btn.Text = text
         Btn.Font = Enum.Font.GothamBold
         Btn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -597,10 +350,16 @@ function Library:CreateSection(name)
         corner(Btn, 6)
 
         Btn.MouseButton1Click:Connect(function()
-            tween(Btn, { BackgroundColor3 = Color3.fromRGB(70, 95, 210) }, 0.08)
+            local a = Colors.Accent
+            local darker = Color3.new(a.R * 0.7, a.G * 0.7, a.B * 0.7)
+            tween(Btn, { BackgroundColor3 = darker }, 0.08)
             task.wait(0.08)
-            tween(Btn, { BackgroundColor3 = Theme.Accent }, 0.12)
+            tween(Btn, { BackgroundColor3 = Colors.Accent }, 0.12)
             callback()
+        end)
+
+        onAccentChanged(function(color)
+            Btn.BackgroundColor3 = color
         end)
 
         return Btn
@@ -692,7 +451,624 @@ function Library:CreateSection(name)
         }
     end
 
+    -- ===== COLOR PICKER =====
+    -- R/G/B sliders + a live preview swatch. callback(color: Color3)
+    function SectionObj:AddColorPicker(text, default, callback)
+        default = default or Color3.fromRGB(255, 255, 255)
+        callback = callback or function() end
+        self._order = self._order + 1
+
+        local Row = Instance.new("Frame")
+        Row.LayoutOrder = self._order
+        Row.BackgroundTransparency = 1
+        Row.Size = UDim2.new(1, 0, 0, 0)
+        Row.AutomaticSize = Enum.AutomaticSize.Y
+        Row.Parent = Section
+
+        local RowLayout = Instance.new("UIListLayout")
+        RowLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        RowLayout.Padding = UDim.new(0, 8)
+        RowLayout.Parent = Row
+
+        -- Header: label + live preview swatch
+        local Header = Instance.new("Frame")
+        Header.LayoutOrder = 1
+        Header.BackgroundTransparency = 1
+        Header.Size = UDim2.new(1, 0, 0, 20)
+        Header.Parent = Row
+
+        local Label = Instance.new("TextLabel")
+        Label.BackgroundTransparency = 1
+        Label.Size = UDim2.new(1, -34, 1, 0)
+        Label.Font = Enum.Font.Gotham
+        Label.Text = text
+        Label.TextColor3 = Theme.SubText
+        Label.TextSize = 13
+        Label.TextXAlignment = Enum.TextXAlignment.Left
+        Label.Parent = Header
+
+        local Preview = Instance.new("Frame")
+        Preview.Size = UDim2.new(0, 26, 0, 20)
+        Preview.Position = UDim2.new(1, -26, 0, 0)
+        Preview.BackgroundColor3 = default
+        Preview.Parent = Header
+        corner(Preview, 6)
+        stroke(Preview, Theme.Stroke, 1)
+
+        local r = math.floor(default.R * 255 + 0.5)
+        local g = math.floor(default.G * 255 + 0.5)
+        local b = math.floor(default.B * 255 + 0.5)
+
+        local function pushUpdate()
+            local color = Color3.fromRGB(r, g, b)
+            Preview.BackgroundColor3 = color
+            callback(color)
+        end
+
+        -- Builds one R/G/B channel slider row; onChange(newValue:number) fires while dragging.
+        local function makeChannelSlider(order, channelLabel, initial, onChange)
+            local CRow = Instance.new("Frame")
+            CRow.LayoutOrder = order
+            CRow.BackgroundTransparency = 1
+            CRow.Size = UDim2.new(1, 0, 0, 26)
+            CRow.Parent = Row
+
+            local CLabel = Instance.new("TextLabel")
+            CLabel.BackgroundTransparency = 1
+            CLabel.Size = UDim2.new(0, 16, 0, 14)
+            CLabel.Font = Enum.Font.GothamBold
+            CLabel.Text = channelLabel
+            CLabel.TextColor3 = Theme.SubText
+            CLabel.TextSize = 12
+            CLabel.TextXAlignment = Enum.TextXAlignment.Left
+            CLabel.Parent = CRow
+
+            local CValue = Instance.new("TextLabel")
+            CValue.BackgroundTransparency = 1
+            CValue.Size = UDim2.new(0, 34, 0, 14)
+            CValue.Position = UDim2.new(1, -34, 0, 0)
+            CValue.Font = Enum.Font.GothamBold
+            CValue.Text = tostring(initial)
+            CValue.TextColor3 = Theme.Text
+            CValue.TextSize = 12
+            CValue.TextXAlignment = Enum.TextXAlignment.Right
+            CValue.Parent = CRow
+
+            local Track = Instance.new("Frame")
+            Track.Size = UDim2.new(1, 0, 0, 6)
+            Track.Position = UDim2.new(0, 0, 0, 18)
+            Track.BackgroundColor3 = Theme.ToggleOff
+            Track.Parent = CRow
+            corner(Track, 3)
+
+            local Fill = Instance.new("Frame")
+            local pct = initial / 255
+            Fill.Size = UDim2.new(pct, 0, 1, 0)
+            Fill.BackgroundColor3 = Color3.fromRGB(200, 200, 205)
+            Fill.Parent = Track
+            corner(Fill, 3)
+
+            local Knob = Instance.new("Frame")
+            Knob.Size = UDim2.new(0, 12, 0, 12)
+            Knob.Position = UDim2.new(pct, -6, 0.5, -6)
+            Knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+            Knob.ZIndex = 2
+            Knob.Parent = Track
+            corner(Knob, 6)
+
+            local dragging = false
+
+            local function updateFromX(xPos)
+                local relative = math.clamp((xPos - Track.AbsolutePosition.X) / Track.AbsoluteSize.X, 0, 1)
+                local value = math.floor(255 * relative)
+                Fill.Size = UDim2.new(relative, 0, 1, 0)
+                Knob.Position = UDim2.new(relative, -6, 0.5, -6)
+                CValue.Text = tostring(value)
+                onChange(value)
+            end
+
+            Track.InputBegan:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                    dragging = true
+                    updateFromX(input.Position.X)
+                end
+            end)
+            UserInputService.InputEnded:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                    dragging = false
+                end
+            end)
+            UserInputService.InputChanged:Connect(function(input)
+                if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                    updateFromX(input.Position.X)
+                end
+            end)
+        end
+
+        makeChannelSlider(2, "R", r, function(v) r = v; pushUpdate() end)
+        makeChannelSlider(3, "G", g, function(v) g = v; pushUpdate() end)
+        makeChannelSlider(4, "B", b, function(v) b = v; pushUpdate() end)
+
+        return {
+            Set = function(_, color)
+                r = math.floor(color.R * 255 + 0.5)
+                g = math.floor(color.G * 255 + 0.5)
+                b = math.floor(color.B * 255 + 0.5)
+                Preview.BackgroundColor3 = color
+                callback(color)
+            end,
+            Get = function() return Color3.fromRGB(r, g, b) end,
+        }
+    end
+
     return SectionObj
+end
+
+-- ===== WINDOW =====
+function Library:CreateWindow(config)
+    config = config or {}
+    local title = config.Title or "Settings"
+    local subtitle = config.Subtitle or ""
+
+    -- Remove old instance if it exists (handy for re-running the script)
+    local existing = PlayerGui:FindFirstChild("CustomGUI_ScreenGui")
+    if existing then existing:Destroy() end
+
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "CustomGUI_ScreenGui"
+    ScreenGui.ResetOnSpawn = false
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    ScreenGui.Parent = PlayerGui
+
+    local WINDOW_WIDTH, WINDOW_HEIGHT = 480, 400
+
+    local Main = Instance.new("Frame")
+    Main.Name = "Main"
+    Main.Size = UDim2.new(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT)
+    Main.Position = UDim2.new(0.5, -WINDOW_WIDTH / 2, 0.5, -WINDOW_HEIGHT / 2)
+    Main.BackgroundColor3 = Theme.Background
+    Main.BorderSizePixel = 0
+    Main.Active = true
+    Main.Parent = ScreenGui
+    corner(Main, 10)
+    stroke(Main, Theme.Stroke, 1)
+
+    -- Top bar (draggable)
+    local TOPBAR_HEIGHT = subtitle ~= "" and 58 or 46
+
+    local TopBar = Instance.new("Frame")
+    TopBar.Name = "TopBar"
+    TopBar.Size = UDim2.new(1, 0, 0, TOPBAR_HEIGHT)
+    TopBar.BackgroundColor3 = Theme.Section
+    TopBar.BorderSizePixel = 0
+    TopBar.Parent = Main
+    corner(TopBar, 10)
+
+    -- Cover bottom corners of topbar so it looks flush with Main
+    local TopBarFix = Instance.new("Frame")
+    TopBarFix.Size = UDim2.new(1, 0, 0, 10)
+    TopBarFix.Position = UDim2.new(0, 0, 1, -10)
+    TopBarFix.BackgroundColor3 = Theme.Section
+    TopBarFix.BorderSizePixel = 0
+    TopBarFix.ZIndex = 0
+    TopBarFix.Parent = TopBar
+
+    local TitleLabel = Instance.new("TextLabel")
+    TitleLabel.BackgroundTransparency = 1
+    TitleLabel.Font = Enum.Font.GothamBold
+    TitleLabel.Text = title
+    TitleLabel.TextColor3 = Theme.Text
+    TitleLabel.TextSize = 16
+    TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    TitleLabel.TextYAlignment = Enum.TextYAlignment.Center
+    TitleLabel.Parent = TopBar
+
+    if subtitle ~= "" then
+        -- Title sits in the top half, subtitle underneath it
+        TitleLabel.Position = UDim2.new(0, 16, 0, 6)
+        TitleLabel.Size = UDim2.new(1, -80, 0, 20)
+
+        local SubLabel = Instance.new("TextLabel")
+        SubLabel.BackgroundTransparency = 1
+        SubLabel.Position = UDim2.new(0, 16, 0, 28)
+        SubLabel.Size = UDim2.new(1, -80, 0, 16)
+        SubLabel.Font = Enum.Font.Gotham
+        SubLabel.Text = subtitle
+        SubLabel.TextColor3 = Theme.SubText
+        SubLabel.TextSize = 12
+        SubLabel.TextXAlignment = Enum.TextXAlignment.Left
+        SubLabel.Parent = TopBar
+    else
+        -- No subtitle: title is vertically centered in the whole bar
+        TitleLabel.Position = UDim2.new(0, 16, 0, 0)
+        TitleLabel.Size = UDim2.new(1, -80, 1, 0)
+    end
+
+    -- Close button
+    local CloseBtn = Instance.new("TextButton")
+    CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+    CloseBtn.Position = UDim2.new(1, -38, 0, TOPBAR_HEIGHT / 2 - 15)
+    CloseBtn.BackgroundColor3 = Theme.ToggleOff
+    CloseBtn.Text = "×"
+    CloseBtn.TextColor3 = Theme.Text
+    CloseBtn.Font = Enum.Font.GothamBold
+    CloseBtn.TextSize = 18
+    CloseBtn.Parent = TopBar
+    corner(CloseBtn, 6)
+    CloseBtn.MouseButton1Click:Connect(function()
+        ScreenGui.Enabled = false
+    end)
+
+    -- Minimize toggle (optional, small nicety)
+    local MinBtn = Instance.new("TextButton")
+    MinBtn.Size = UDim2.new(0, 30, 0, 30)
+    MinBtn.Position = UDim2.new(1, -74, 0, TOPBAR_HEIGHT / 2 - 15)
+    MinBtn.BackgroundColor3 = Theme.ToggleOff
+    MinBtn.Text = "–"
+    MinBtn.TextColor3 = Theme.Text
+    MinBtn.Font = Enum.Font.GothamBold
+    MinBtn.TextSize = 18
+    MinBtn.Parent = TopBar
+    corner(MinBtn, 6)
+
+    -- ===== TAB BAR =====
+    local TABBAR_HEIGHT = 32
+    local GAP = 8
+
+    local TabBar = Instance.new("Frame")
+    TabBar.Name = "TabBar"
+    TabBar.Position = UDim2.new(0, 12, 0, TOPBAR_HEIGHT + GAP)
+    TabBar.Size = UDim2.new(1, -24, 0, TABBAR_HEIGHT)
+    TabBar.BackgroundTransparency = 1
+    TabBar.Parent = Main
+
+    local TabBarLayout = Instance.new("UIListLayout")
+    TabBarLayout.FillDirection = Enum.FillDirection.Horizontal
+    TabBarLayout.Padding = UDim.new(0, 6)
+    TabBarLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    TabBarLayout.Parent = TabBar
+
+    -- ===== TAB CONTENT AREA =====
+    local contentY = TOPBAR_HEIGHT + GAP + TABBAR_HEIGHT + GAP
+    local ContentHolder = Instance.new("Frame")
+    ContentHolder.Name = "ContentHolder"
+    ContentHolder.Position = UDim2.new(0, 12, 0, contentY)
+    ContentHolder.Size = UDim2.new(1, -24, 1, -(contentY + 12))
+    ContentHolder.BackgroundTransparency = 1
+    ContentHolder.Parent = Main
+
+    local minimized = false
+    MinBtn.MouseButton1Click:Connect(function()
+        minimized = not minimized
+        TabBar.Visible = not minimized
+        ContentHolder.Visible = not minimized
+        tween(Main, { Size = minimized and UDim2.new(0, WINDOW_WIDTH, 0, TOPBAR_HEIGHT) or UDim2.new(0, WINDOW_WIDTH, 0, WINDOW_HEIGHT) }, 0.2)
+    end)
+
+    -- Dragging
+    do
+        local dragging, dragStart, startPos
+        TopBar.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = Main.Position
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        dragging = false
+                    end
+                end)
+            end
+        end)
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                local delta = input.Position - dragStart
+                Main.Position = UDim2.new(
+                    startPos.X.Scale, startPos.X.Offset + delta.X,
+                    startPos.Y.Scale, startPos.Y.Offset + delta.Y
+                )
+            end
+        end)
+    end
+
+    -- Toggle GUI visibility with Right Shift (customizable)
+    UserInputService.InputBegan:Connect(function(input, gpe)
+        if gpe then return end
+        if input.KeyCode == Enum.KeyCode.RightShift then
+            ScreenGui.Enabled = not ScreenGui.Enabled
+        end
+    end)
+
+    -- Notification holder (position/alignment set by SetNotifyPosition below)
+    local NotifyHolder = Instance.new("Frame")
+    NotifyHolder.Name = "NotifyHolder"
+    NotifyHolder.BackgroundTransparency = 1
+    NotifyHolder.Size = UDim2.new(0, 280, 1, -32)
+    NotifyHolder.Parent = ScreenGui
+
+    local NotifyLayout = Instance.new("UIListLayout")
+    NotifyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    NotifyLayout.Padding = UDim.new(0, 8)
+    NotifyLayout.Parent = NotifyHolder
+
+    local Window = setmetatable({
+        ScreenGui = ScreenGui,
+        Main = Main,
+        TabBar = TabBar,
+        ContentHolder = ContentHolder,
+        NotifyHolder = NotifyHolder,
+        NotifyLayout = NotifyLayout,
+        NotifyPositionName = DEFAULT_NOTIFY_POSITION,
+        Tabs = {},
+        _tabOrder = 0,
+        _activeTab = nil,
+        _notifyOrder = 0,
+    }, Library)
+
+    Window:SetNotifyPosition(DEFAULT_NOTIFY_POSITION)
+
+    -- ===== Built-in Settings tab (selected by default) =====
+    local SettingsTab = Window:CreateTab("Settings")
+
+    local NotifSection = SettingsTab:CreateSection("Notifications")
+    NotifSection:AddDropdown("Notification Position", NOTIFY_POSITION_NAMES, DEFAULT_NOTIFY_POSITION, function(selected)
+        Window:SetNotifyPosition(selected)
+    end)
+
+    local AppearanceSection = SettingsTab:CreateSection("Appearance")
+    AppearanceSection:AddColorPicker("UI Color", Theme.Accent, function(color)
+        Window:SetAccentColor(color)
+    end)
+
+    return Window
+end
+
+-- ===== TABS =====
+-- Window:CreateTab(name) -> Tab object with :CreateSection(name)
+function Library:CreateTab(name)
+    self._tabOrder = self._tabOrder + 1
+    local order = self._tabOrder
+
+    local TabButton = Instance.new("TextButton")
+    TabButton.Name = name
+    TabButton.LayoutOrder = order
+    TabButton.AutomaticSize = Enum.AutomaticSize.X
+    TabButton.Size = UDim2.new(0, 0, 1, 0)
+    TabButton.BackgroundColor3 = Theme.Section
+    TabButton.Text = name
+    TabButton.Font = Enum.Font.GothamBold
+    TabButton.TextColor3 = Theme.SubText
+    TabButton.TextSize = 13
+    TabButton.Parent = self.TabBar
+    corner(TabButton, 6)
+
+    local TabPadding = Instance.new("UIPadding")
+    TabPadding.PaddingLeft = UDim.new(0, 14)
+    TabPadding.PaddingRight = UDim.new(0, 14)
+    TabPadding.Parent = TabButton
+
+    local Container = Instance.new("ScrollingFrame")
+    Container.Name = name .. "Container"
+    Container.BackgroundTransparency = 1
+    Container.BorderSizePixel = 0
+    Container.Size = UDim2.new(1, 0, 1, 0)
+    Container.ScrollBarThickness = 4
+    Container.ScrollBarImageColor3 = Colors.Accent
+    Container.CanvasSize = UDim2.new(0, 0, 0, 0)
+    Container.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    Container.Visible = false
+    Container.Parent = self.ContentHolder
+
+    local ContainerLayout = Instance.new("UIListLayout")
+    ContainerLayout.Padding = UDim.new(0, 10)
+    ContainerLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    ContainerLayout.Parent = Container
+
+    onAccentChanged(function(color)
+        Container.ScrollBarImageColor3 = color
+    end)
+
+    self.Tabs[name] = { Button = TabButton, Container = Container }
+
+    TabButton.MouseButton1Click:Connect(function()
+        self:SetActiveTab(name)
+    end)
+
+    onAccentChanged(function(color)
+        if self._activeTab == name then
+            TabButton.BackgroundColor3 = color
+        end
+    end)
+
+    -- First tab created becomes the default active tab (the built-in
+    -- "Settings" tab is always created first, so it's the default).
+    if not self._activeTab then
+        self:SetActiveTab(name)
+    end
+
+    local TabObj = {
+        Frame = Container,
+        _order = 0,
+    }
+
+    function TabObj:CreateSection(sectionName)
+        return buildSection(self.Frame, self, sectionName)
+    end
+
+    return TabObj
+end
+
+function Library:SetActiveTab(name)
+    if not self.Tabs[name] then return end
+    for tabName, data in pairs(self.Tabs) do
+        local active = tabName == name
+        data.Container.Visible = active
+        data.Button.BackgroundColor3 = active and Colors.Accent or Theme.Section
+        data.Button.TextColor3 = active and Color3.fromRGB(255, 255, 255) or Theme.SubText
+    end
+    self._activeTab = name
+end
+
+-- Legacy/simple usage: Window:CreateSection(name) works without setting up
+-- tabs explicitly — it lazily creates a "Main" tab the first time it's used.
+function Library:CreateSection(name)
+    if not self._legacyTab then
+        self._legacyTab = self:CreateTab("Main")
+    end
+    return self._legacyTab:CreateSection(name)
+end
+
+-- ===== ACCENT COLOR =====
+-- Window:SetAccentColor(Color3.fromRGB(...)) recolors every toggle, slider,
+-- button, active tab, scrollbar, and "Info" notification instantly.
+function Library:SetAccentColor(color)
+    Colors.Accent = color
+    for _, fn in ipairs(AccentListeners) do
+        fn(color)
+    end
+end
+
+-- ===== NOTIFICATION POSITION =====
+-- Window:SetNotifyPosition("Top Right" | "Top Left" | "Top Center" |
+--                           "Bottom Right" | "Bottom Left" | "Bottom Center")
+function Library:SetNotifyPosition(name)
+    local cfg = NotifyPositions[name]
+    if not cfg then return end
+    self.NotifyHolder.AnchorPoint = cfg.anchor
+    self.NotifyHolder.Position = cfg.position
+    self.NotifyLayout.HorizontalAlignment = cfg.hAlign
+    self.NotifyLayout.VerticalAlignment = cfg.vAlign
+    self.NotifyPositionName = name
+end
+
+-- ===== NOTIFICATIONS =====
+-- Window:Notify({ Title = "...", Text = "...", Duration = 4, Type = "Info"/"Success"/"Warning"/"Error" })
+-- Also callable as Window:Notify("Title", "Text", 4)
+function Library:Notify(a, b, c)
+    local title, text, duration, notifType
+
+    if type(a) == "table" then
+        title = a.Title or "Notification"
+        text = a.Text or ""
+        duration = a.Duration or 4
+        notifType = a.Type or "Info"
+    else
+        title = a or "Notification"
+        text = b or ""
+        duration = c or 4
+        notifType = "Info"
+    end
+
+    local TypeColors = {
+        Info = Colors.Accent,
+        Success = Color3.fromRGB(80, 200, 120),
+        Warning = Color3.fromRGB(230, 180, 60),
+        Error = Color3.fromRGB(230, 90, 90),
+    }
+    local accentColor = TypeColors[notifType] or Colors.Accent
+
+    self._notifyOrder = self._notifyOrder + 1
+
+    local Toast = Instance.new("Frame")
+    Toast.LayoutOrder = self._notifyOrder
+    Toast.Size = UDim2.new(1, 0, 0, 0)
+    Toast.AutomaticSize = Enum.AutomaticSize.Y
+    Toast.BackgroundColor3 = Theme.Section
+    Toast.BorderSizePixel = 0
+    Toast.ClipsDescendants = true
+    Toast.Parent = self.NotifyHolder
+    corner(Toast, 8)
+    stroke(Toast, Theme.Stroke, 1)
+
+    -- Content holder: everything stacks inside via UIListLayout, so the
+    -- toast's AutomaticSize can correctly measure wrapped text height.
+    local Content = Instance.new("Frame")
+    Content.BackgroundTransparency = 1
+    Content.Size = UDim2.new(1, 0, 0, 0)
+    Content.AutomaticSize = Enum.AutomaticSize.Y
+    Content.Parent = Toast
+
+    local Padding = Instance.new("UIPadding")
+    Padding.PaddingTop = UDim.new(0, 10)
+    Padding.PaddingBottom = UDim.new(0, 10)
+    Padding.PaddingLeft = UDim.new(0, 14)
+    Padding.PaddingRight = UDim.new(0, 12)
+    Padding.Parent = Content
+
+    local ContentLayout = Instance.new("UIListLayout")
+    ContentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    ContentLayout.Padding = UDim.new(0, 4)
+    ContentLayout.Parent = Content
+
+    -- Header row: a small colored dot next to the title
+    local HeaderRow = Instance.new("Frame")
+    HeaderRow.LayoutOrder = 1
+    HeaderRow.BackgroundTransparency = 1
+    HeaderRow.Size = UDim2.new(1, 0, 0, 16)
+    HeaderRow.Parent = Content
+
+    local HeaderLayout = Instance.new("UIListLayout")
+    HeaderLayout.FillDirection = Enum.FillDirection.Horizontal
+    HeaderLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    HeaderLayout.Padding = UDim.new(0, 8)
+    HeaderLayout.Parent = HeaderRow
+
+    local Dot = Instance.new("Frame")
+    Dot.LayoutOrder = 1
+    Dot.Size = UDim2.new(0, 8, 0, 8)
+    Dot.BackgroundColor3 = accentColor
+    Dot.BorderSizePixel = 0
+    Dot.Parent = HeaderRow
+    corner(Dot, 4)
+
+    local TitleLabel = Instance.new("TextLabel")
+    TitleLabel.LayoutOrder = 2
+    TitleLabel.BackgroundTransparency = 1
+    TitleLabel.Size = UDim2.new(1, -16, 1, 0)
+    TitleLabel.Font = Enum.Font.GothamBold
+    TitleLabel.Text = title
+    TitleLabel.TextColor3 = Theme.Text
+    TitleLabel.TextSize = 13
+    TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    TitleLabel.Parent = HeaderRow
+
+    local TextLabel = Instance.new("TextLabel")
+    TextLabel.LayoutOrder = 2
+    TextLabel.BackgroundTransparency = 1
+    TextLabel.Size = UDim2.new(1, 0, 0, 0)
+    TextLabel.AutomaticSize = Enum.AutomaticSize.Y
+    TextLabel.Font = Enum.Font.Gotham
+    TextLabel.Text = text
+    TextLabel.TextColor3 = Theme.SubText
+    TextLabel.TextSize = 12
+    TextLabel.TextWrapped = true
+    TextLabel.TextXAlignment = Enum.TextXAlignment.Left
+    TextLabel.Parent = Content
+
+    -- Slide in (from the direction of whichever edge it's anchored near)
+    -- + fade in.
+    local vAlign = self.NotifyLayout.VerticalAlignment
+    local startYOffset = (vAlign == Enum.VerticalAlignment.Bottom) and 20 or -20
+
+    Toast.Position = UDim2.new(0, 0, 0, startYOffset)
+    Toast.BackgroundTransparency = 1
+    Dot.BackgroundTransparency = 1
+    TitleLabel.TextTransparency = 1
+    TextLabel.TextTransparency = 1
+
+    tween(Toast, { Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 0 }, 0.2)
+    tween(Dot, { BackgroundTransparency = 0 }, 0.2)
+    tween(TitleLabel, { TextTransparency = 0 }, 0.2)
+    tween(TextLabel, { TextTransparency = 0 }, 0.2)
+
+    task.delay(duration, function()
+        tween(Toast, { Position = UDim2.new(0, 0, 0, startYOffset), BackgroundTransparency = 1 }, 0.2)
+        tween(Dot, { BackgroundTransparency = 1 }, 0.2)
+        tween(TitleLabel, { TextTransparency = 1 }, 0.2)
+        tween(TextLabel, { TextTransparency = 1 }, 0.2)
+        task.wait(0.25)
+        Toast:Destroy()
+    end)
 end
 
 return Library
