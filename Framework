@@ -21,7 +21,8 @@
     A "Settings" tab is created automatically and is selected by default.
     It contains:
       - Notification Position (dropdown: which corner toasts appear in)
-      - UI Color (R/G/B sliders that recolor the whole GUI's accent live)
+      - Enable Notifications (toggle: turn toast notifications on/off)
+      - UI Color (R/G/B sliders + typeable boxes that recolor the whole GUI's accent live)
 ]]
 
 local Players = game:GetService("Players")
@@ -113,6 +114,17 @@ local NOTIFY_POSITION_NAMES = {
     "Top Right", "Top Left", "Top Center", "Bottom Right", "Bottom Left", "Bottom Center",
 }
 local DEFAULT_NOTIFY_POSITION = "Top Right"
+
+-- Global registry of currently-open dropdown lists, so opening one closes
+-- any others (prevents multiple overlapping lists at once).
+local OpenDropdowns = {}
+local function closeAllDropdowns(except)
+    for _, entry in ipairs(OpenDropdowns) do
+        if entry.ListFrame ~= except then
+            entry.ListFrame.Visible = false
+        end
+    end
+end
 
 -- ===== SECTION BUILDER =====
 -- Shared by Window:CreateSection (legacy/simple usage) and Tab:CreateSection.
@@ -379,6 +391,7 @@ local function buildSection(container, orderState, name)
         Row.Size = UDim2.new(1, 0, 0, 44)
         Row.Parent = Section
         Row.ClipsDescendants = false
+        Row.ZIndex = 2
 
         local Label = Instance.new("TextLabel")
         Label.BackgroundTransparency = 1
@@ -388,6 +401,7 @@ local function buildSection(container, orderState, name)
         Label.TextColor3 = Theme.SubText
         Label.TextSize = 13
         Label.TextXAlignment = Enum.TextXAlignment.Left
+        Label.ZIndex = 2
         Label.Parent = Row
 
         local Selector = Instance.new("TextButton")
@@ -399,33 +413,47 @@ local function buildSection(container, orderState, name)
         Selector.Font = Enum.Font.Gotham
         Selector.TextColor3 = Theme.Text
         Selector.TextSize = 13
+        Selector.ZIndex = 2
         Selector.Parent = Row
         corner(Selector, 6)
 
+        -- The dropdown list is parented directly to the ScreenGui-level
+        -- overlay chain via a very high ZIndex so it always renders above
+        -- every other section/row, regardless of sibling order. This
+        -- requires the ScreenGui to use ZIndexBehavior.Global (set when
+        -- the window is created) — otherwise ZIndex only compares among
+        -- direct siblings and the list would render underneath whatever
+        -- section happens to come after this one.
         local ListFrame = Instance.new("Frame")
         ListFrame.Size = UDim2.new(1, 0, 0, #options * 26)
         ListFrame.Position = UDim2.new(0, 0, 1, 4)
         ListFrame.BackgroundColor3 = Theme.ToggleOff
         ListFrame.Visible = false
-        ListFrame.ZIndex = 5
+        ListFrame.ZIndex = 1000
+        ListFrame.ClipsDescendants = true
         ListFrame.Parent = Selector
         corner(ListFrame, 6)
+        stroke(ListFrame, Theme.Stroke, 1)
 
         local ListLayout = Instance.new("UIListLayout")
         ListLayout.SortOrder = Enum.SortOrder.LayoutOrder
         ListLayout.Parent = ListFrame
 
+        table.insert(OpenDropdowns, { ListFrame = ListFrame })
+
         local selected = default
         for i, opt in ipairs(options) do
             local OptBtn = Instance.new("TextButton")
             OptBtn.Size = UDim2.new(1, 0, 0, 26)
-            OptBtn.BackgroundTransparency = 1
+            OptBtn.BackgroundColor3 = Theme.ToggleOff
+            OptBtn.BackgroundTransparency = 0
+            OptBtn.BorderSizePixel = 0
             OptBtn.Text = "  " .. tostring(opt)
             OptBtn.TextXAlignment = Enum.TextXAlignment.Left
             OptBtn.Font = Enum.Font.Gotham
             OptBtn.TextColor3 = Theme.Text
             OptBtn.TextSize = 13
-            OptBtn.ZIndex = 6
+            OptBtn.ZIndex = 1001
             OptBtn.LayoutOrder = i
             OptBtn.Parent = ListFrame
 
@@ -438,7 +466,9 @@ local function buildSection(container, orderState, name)
         end
 
         Selector.MouseButton1Click:Connect(function()
-            ListFrame.Visible = not ListFrame.Visible
+            local willOpen = not ListFrame.Visible
+            closeAllDropdowns(willOpen and ListFrame or nil)
+            ListFrame.Visible = willOpen
         end)
 
         return {
@@ -452,7 +482,8 @@ local function buildSection(container, orderState, name)
     end
 
     -- ===== COLOR PICKER =====
-    -- R/G/B sliders + a live preview swatch. callback(color: Color3)
+    -- R/G/B sliders (draggable or typeable, clamped 0-255) + a live preview
+    -- swatch. callback(color: Color3)
     function SectionObj:AddColorPicker(text, default, callback)
         default = default or Color3.fromRGB(255, 255, 255)
         callback = callback or function() end
@@ -505,7 +536,10 @@ local function buildSection(container, orderState, name)
             callback(color)
         end
 
-        -- Builds one R/G/B channel slider row; onChange(newValue:number) fires while dragging.
+        -- Builds one R/G/B channel slider row with a typeable value box.
+        -- onChange(newValue:number) fires whenever the value changes,
+        -- whether from dragging the slider or typing+confirming a number.
+        -- The value is always clamped to [0, 255].
         local function makeChannelSlider(order, channelLabel, initial, onChange)
             local CRow = Instance.new("Frame")
             CRow.LayoutOrder = order
@@ -523,19 +557,23 @@ local function buildSection(container, orderState, name)
             CLabel.TextXAlignment = Enum.TextXAlignment.Left
             CLabel.Parent = CRow
 
-            local CValue = Instance.new("TextLabel")
-            CValue.BackgroundTransparency = 1
-            CValue.Size = UDim2.new(0, 34, 0, 14)
-            CValue.Position = UDim2.new(1, -34, 0, 0)
+            -- Typeable value box (replaces the old plain TextLabel) so the
+            -- user can either drag the slider or type an exact number.
+            local CValue = Instance.new("TextBox")
+            CValue.Size = UDim2.new(0, 40, 0, 16)
+            CValue.Position = UDim2.new(1, -40, 0, -1)
+            CValue.BackgroundColor3 = Theme.ToggleOff
             CValue.Font = Enum.Font.GothamBold
             CValue.Text = tostring(initial)
             CValue.TextColor3 = Theme.Text
             CValue.TextSize = 12
-            CValue.TextXAlignment = Enum.TextXAlignment.Right
+            CValue.TextXAlignment = Enum.TextXAlignment.Center
+            CValue.ClearTextOnFocus = false
             CValue.Parent = CRow
+            corner(CValue, 4)
 
             local Track = Instance.new("Frame")
-            Track.Size = UDim2.new(1, 0, 0, 6)
+            Track.Size = UDim2.new(1, -46, 0, 6)
             Track.Position = UDim2.new(0, 0, 0, 18)
             Track.BackgroundColor3 = Theme.ToggleOff
             Track.Parent = CRow
@@ -557,14 +595,26 @@ local function buildSection(container, orderState, name)
             corner(Knob, 6)
 
             local dragging = false
+            local currentValue = initial
+
+            -- Single source of truth for applying a new value: clamps to
+            -- 0-255, updates the slider visuals + text box, and fires
+            -- onChange. Used by both dragging and typing.
+            local function setValue(newValue, fromTextBox)
+                newValue = math.clamp(math.floor(newValue + 0.5), 0, 255)
+                currentValue = newValue
+                local relative = newValue / 255
+                Fill.Size = UDim2.new(relative, 0, 1, 0)
+                Knob.Position = UDim2.new(relative, -6, 0.5, -6)
+                if not fromTextBox then
+                    CValue.Text = tostring(newValue)
+                end
+                onChange(newValue)
+            end
 
             local function updateFromX(xPos)
                 local relative = math.clamp((xPos - Track.AbsolutePosition.X) / Track.AbsoluteSize.X, 0, 1)
-                local value = math.floor(255 * relative)
-                Fill.Size = UDim2.new(relative, 0, 1, 0)
-                Knob.Position = UDim2.new(relative, -6, 0.5, -6)
-                CValue.Text = tostring(value)
-                onChange(value)
+                setValue(255 * relative, false)
             end
 
             Track.InputBegan:Connect(function(input)
@@ -582,6 +632,17 @@ local function buildSection(container, orderState, name)
                 if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
                     updateFromX(input.Position.X)
                 end
+            end)
+
+            -- Typing a number in: commit on Enter/focus-lost, clamp to
+            -- 0-255, and reject non-numeric input by reverting to the
+            -- last valid value.
+            CValue.FocusLost:Connect(function()
+                local num = tonumber(CValue.Text)
+                if num then
+                    setValue(num, true)
+                end
+                CValue.Text = tostring(currentValue)
             end)
         end
 
@@ -617,7 +678,11 @@ function Library:CreateWindow(config)
     local ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "CustomGUI_ScreenGui"
     ScreenGui.ResetOnSpawn = false
-    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    -- Global (not Sibling) so a dropdown list's high ZIndex reliably wins
+    -- against ANY other UI element in the tree, not just its own siblings.
+    -- This is what fixes dropdown lists rendering underneath later
+    -- sections/tabs.
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
     ScreenGui.Parent = PlayerGui
 
     local WINDOW_WIDTH, WINDOW_HEIGHT = 480, 400
@@ -803,6 +868,7 @@ function Library:CreateWindow(config)
         _tabOrder = 0,
         _activeTab = nil,
         _notifyOrder = 0,
+        _notificationsEnabled = true,
     }, Library)
 
     Window:SetNotifyPosition(DEFAULT_NOTIFY_POSITION)
@@ -811,6 +877,9 @@ function Library:CreateWindow(config)
     local SettingsTab = Window:CreateTab("Settings")
 
     local NotifSection = SettingsTab:CreateSection("Notifications")
+    NotifSection:AddToggle("Enable Notifications", true, function(state)
+        Window._notificationsEnabled = state
+    end)
     NotifSection:AddDropdown("Notification Position", NOTIFY_POSITION_NAMES, DEFAULT_NOTIFY_POSITION, function(selected)
         Window:SetNotifyPosition(selected)
     end)
@@ -941,10 +1010,23 @@ function Library:SetNotifyPosition(name)
     self.NotifyPositionName = name
 end
 
+-- ===== NOTIFICATIONS TOGGLE =====
+-- Window:SetNotificationsEnabled(true/false) — also wired up to the
+-- "Enable Notifications" toggle in the built-in Settings tab.
+function Library:SetNotificationsEnabled(enabled)
+    self._notificationsEnabled = enabled
+end
+
 -- ===== NOTIFICATIONS =====
 -- Window:Notify({ Title = "...", Text = "...", Duration = 4, Type = "Info"/"Success"/"Warning"/"Error" })
 -- Also callable as Window:Notify("Title", "Text", 4)
 function Library:Notify(a, b, c)
+    -- Respect the "Enable Notifications" setting — if the user has turned
+    -- notifications off, silently skip showing the toast.
+    if self._notificationsEnabled == false then
+        return
+    end
+
     local title, text, duration, notifType
 
     if type(a) == "table" then
