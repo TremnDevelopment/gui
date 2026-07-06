@@ -288,19 +288,8 @@ function Library:Notify(a, b, c)
     corner(Toast, 8)
     stroke(Toast, Theme.Stroke, 1)
 
-    -- Colored accent bar on the left (inset as a pill so its square
-    -- corners don't poke out past the toast's rounded corners)
-    local AccentBar = Instance.new("Frame")
-    AccentBar.Position = UDim2.new(0, 4, 0, 6)
-    AccentBar.Size = UDim2.new(0, 4, 1, -12)
-    AccentBar.BackgroundColor3 = accentColor
-    AccentBar.BorderSizePixel = 0
-    AccentBar.ZIndex = 2
-    AccentBar.Parent = Toast
-    corner(AccentBar, 2)
-
-    -- Content holder: everything (title + text) stacks inside this via UIListLayout,
-    -- so the frame's AutomaticSize can correctly measure wrapped text height.
+    -- Content holder: everything stacks inside via UIListLayout, so the
+    -- toast's AutomaticSize can correctly measure wrapped text height.
     local Content = Instance.new("Frame")
     Content.BackgroundTransparency = 1
     Content.Size = UDim2.new(1, 0, 0, 0)
@@ -310,25 +299,46 @@ function Library:Notify(a, b, c)
     local Padding = Instance.new("UIPadding")
     Padding.PaddingTop = UDim.new(0, 10)
     Padding.PaddingBottom = UDim.new(0, 10)
-    Padding.PaddingLeft = UDim.new(0, 18)
+    Padding.PaddingLeft = UDim.new(0, 14)
     Padding.PaddingRight = UDim.new(0, 12)
     Padding.Parent = Content
 
     local ContentLayout = Instance.new("UIListLayout")
     ContentLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    ContentLayout.Padding = UDim.new(0, 2)
+    ContentLayout.Padding = UDim.new(0, 4)
     ContentLayout.Parent = Content
 
+    -- Header row: a small colored dot next to the title
+    local HeaderRow = Instance.new("Frame")
+    HeaderRow.LayoutOrder = 1
+    HeaderRow.BackgroundTransparency = 1
+    HeaderRow.Size = UDim2.new(1, 0, 0, 16)
+    HeaderRow.Parent = Content
+
+    local HeaderLayout = Instance.new("UIListLayout")
+    HeaderLayout.FillDirection = Enum.FillDirection.Horizontal
+    HeaderLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+    HeaderLayout.Padding = UDim.new(0, 8)
+    HeaderLayout.Parent = HeaderRow
+
+    local Dot = Instance.new("Frame")
+    Dot.LayoutOrder = 1
+    Dot.Size = UDim2.new(0, 8, 0, 8)
+    Dot.BackgroundColor3 = accentColor
+    Dot.BorderSizePixel = 0
+    Dot.Parent = HeaderRow
+    corner(Dot, 4)
+
     local TitleLabel = Instance.new("TextLabel")
-    TitleLabel.LayoutOrder = 1
+    TitleLabel.LayoutOrder = 2
     TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Size = UDim2.new(1, 0, 0, 16)
+    TitleLabel.Size = UDim2.new(1, -16, 1, 0)
     TitleLabel.Font = Enum.Font.GothamBold
     TitleLabel.Text = title
     TitleLabel.TextColor3 = Theme.Text
     TitleLabel.TextSize = 13
     TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-    TitleLabel.Parent = Content
+    TitleLabel.Parent = HeaderRow
 
     local TextLabel = Instance.new("TextLabel")
     TextLabel.LayoutOrder = 2
@@ -346,18 +356,18 @@ function Library:Notify(a, b, c)
     -- Slide in from the right + fade in
     Toast.Position = UDim2.new(1, 40, 0, 0)
     Toast.BackgroundTransparency = 1
-    AccentBar.BackgroundTransparency = 1
+    Dot.BackgroundTransparency = 1
     TitleLabel.TextTransparency = 1
     TextLabel.TextTransparency = 1
 
     tween(Toast, { Position = UDim2.new(0, 0, 0, 0), BackgroundTransparency = 0 }, 0.2)
-    tween(AccentBar, { BackgroundTransparency = 0 }, 0.2)
+    tween(Dot, { BackgroundTransparency = 0 }, 0.2)
     tween(TitleLabel, { TextTransparency = 0 }, 0.2)
     tween(TextLabel, { TextTransparency = 0 }, 0.2)
 
     task.delay(duration, function()
         tween(Toast, { Position = UDim2.new(1, 40, 0, 0), BackgroundTransparency = 1 }, 0.2)
-        tween(AccentBar, { BackgroundTransparency = 1 }, 0.2)
+        tween(Dot, { BackgroundTransparency = 1 }, 0.2)
         tween(TitleLabel, { TextTransparency = 1 }, 0.2)
         tween(TextLabel, { TextTransparency = 1 }, 0.2)
         task.wait(0.25)
