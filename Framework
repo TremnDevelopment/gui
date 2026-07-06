@@ -211,10 +211,21 @@ local function buildSection(container, orderState, name)
         corner(Knob, 9)
 
         local state = default
+
+        -- Single source of truth for the visual on/off transition, used by
+        -- both the click handler and :Set() so calling Set() (e.g. from
+        -- another toggle's callback) animates exactly the same way as a
+        -- direct click instead of snapping instantly.
+        local function applyVisual()
+            local color = state and Colors.Accent or Theme.ToggleOff
+            local knobPos = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
+            tween(Switch, { BackgroundColor3 = color })
+            tween(Knob, { Position = knobPos })
+        end
+
         Switch.MouseButton1Click:Connect(function()
             state = not state
-            tween(Switch, { BackgroundColor3 = state and Colors.Accent or Theme.ToggleOff })
-            tween(Knob, { Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9) })
+            applyVisual()
             callback(state)
         end)
 
@@ -231,8 +242,7 @@ local function buildSection(container, orderState, name)
         return {
             Set = function(_, value)
                 state = value
-                Switch.BackgroundColor3 = state and Colors.Accent or Theme.ToggleOff
-                Knob.Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
+                applyVisual()
                 callback(state)
             end,
             Get = function() return state end,
@@ -442,13 +452,44 @@ local function buildSection(container, orderState, name)
         table.insert(OpenDropdowns, { ListFrame = ListFrame })
 
         local selected = default
+        local optionButtons = {} -- opt -> { Button, Check, Bar }
+
+        -- Restyles every option row based on whether it's the current
+        -- selection: the selected option gets an accent-colored side bar,
+        -- a tinted background, bold accent-colored text, and a checkmark —
+        -- clearly set apart from the plain unselected rows.
+        local function refreshSelectionStyle()
+            for opt, refs in pairs(optionButtons) do
+                local isSelected = opt == selected
+                if isSelected then
+                    tween(refs.Button, { BackgroundColor3 = Color3.new(
+                        Colors.Accent.R * 0.25 + Theme.ToggleOff.R * 0.75,
+                        Colors.Accent.G * 0.25 + Theme.ToggleOff.G * 0.75,
+                        Colors.Accent.B * 0.25 + Theme.ToggleOff.B * 0.75
+                    ) }, 0.1)
+                    refs.Button.Font = Enum.Font.GothamBold
+                    refs.Button.TextColor3 = Colors.Accent
+                    refs.Bar.BackgroundColor3 = Colors.Accent
+                    refs.Bar.BackgroundTransparency = 0
+                    refs.Check.Text = "✓"
+                    refs.Check.TextColor3 = Colors.Accent
+                else
+                    tween(refs.Button, { BackgroundColor3 = Theme.ToggleOff }, 0.1)
+                    refs.Button.Font = Enum.Font.Gotham
+                    refs.Button.TextColor3 = Theme.Text
+                    refs.Bar.BackgroundTransparency = 1
+                    refs.Check.Text = ""
+                end
+            end
+        end
+
         for i, opt in ipairs(options) do
             local OptBtn = Instance.new("TextButton")
             OptBtn.Size = UDim2.new(1, 0, 0, 26)
             OptBtn.BackgroundColor3 = Theme.ToggleOff
             OptBtn.BackgroundTransparency = 0
             OptBtn.BorderSizePixel = 0
-            OptBtn.Text = "  " .. tostring(opt)
+            OptBtn.Text = "     " .. tostring(opt)
             OptBtn.TextXAlignment = Enum.TextXAlignment.Left
             OptBtn.Font = Enum.Font.Gotham
             OptBtn.TextColor3 = Theme.Text
@@ -457,13 +498,46 @@ local function buildSection(container, orderState, name)
             OptBtn.LayoutOrder = i
             OptBtn.Parent = ListFrame
 
+            -- Thin accent-colored bar down the left edge, only visible
+            -- (transparency 0) when this option is the selected one.
+            local Bar = Instance.new("Frame")
+            Bar.Size = UDim2.new(0, 3, 1, -8)
+            Bar.Position = UDim2.new(0, 0, 0, 4)
+            Bar.BackgroundColor3 = Colors.Accent
+            Bar.BackgroundTransparency = 1
+            Bar.BorderSizePixel = 0
+            Bar.ZIndex = 1002
+            Bar.Parent = OptBtn
+            corner(Bar, 2)
+
+            -- Checkmark shown only for the selected option.
+            local Check = Instance.new("TextLabel")
+            Check.BackgroundTransparency = 1
+            Check.Size = UDim2.new(0, 24, 1, 0)
+            Check.Position = UDim2.new(1, -26, 0, 0)
+            Check.Font = Enum.Font.GothamBold
+            Check.Text = ""
+            Check.TextColor3 = Colors.Accent
+            Check.TextSize = 14
+            Check.ZIndex = 1002
+            Check.Parent = OptBtn
+
+            optionButtons[opt] = { Button = OptBtn, Check = Check, Bar = Bar }
+
             OptBtn.MouseButton1Click:Connect(function()
                 selected = opt
                 Selector.Text = "  " .. tostring(opt)
                 ListFrame.Visible = false
+                refreshSelectionStyle()
                 callback(opt)
             end)
         end
+
+        refreshSelectionStyle()
+
+        onAccentChanged(function()
+            refreshSelectionStyle()
+        end)
 
         Selector.MouseButton1Click:Connect(function()
             local willOpen = not ListFrame.Visible
@@ -475,6 +549,7 @@ local function buildSection(container, orderState, name)
             Set = function(_, value)
                 selected = value
                 Selector.Text = "  " .. tostring(value)
+                refreshSelectionStyle()
                 callback(value)
             end,
             Get = function() return selected end,
