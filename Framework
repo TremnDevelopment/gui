@@ -28,24 +28,12 @@
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
 
 local LocalPlayer = Players.LocalPlayer
 local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 
 local Library = {}
 Library.__index = Library
-
--- ===== PLUGIN / EXTENSIBILITY REGISTRIES =====
--- These let OTHER scripts (other developers building on top of this GUI)
--- register their own visual effects and brand-new element types without
--- ever editing this file. See the "PLUGIN API" section near the bottom
--- for the public functions (Library:RegisterEffect, Library:ApplyEffect,
--- Library:RegisterElementType) and Section:AddCustom for one-off custom
--- elements.
-Library.Effects = {}            -- name -> applyFn(instance, config)              [per-element effects: Glow, Pulse, etc]
-Library.BackgroundEffects = {}  -- name -> applyFn(backgroundLayer, config)       [whole-window background effects]
-Library.CustomElementTypes = {} -- name -> builderFn(Section, order, self, ...)
 
 -- ===== THEME =====
 -- Static base colors. `Colors.Accent` (below) is the one live-customizable
@@ -93,278 +81,6 @@ local function stroke(parent, color, thickness)
     s.Thickness = thickness or 1
     s.Parent = parent
     return s
-end
-
--- Runs `stepFn()` on a loop roughly every `interval` seconds until either
--- Stop() is called or the instance is destroyed. Used by the looping
--- built-in effects (Glow/Pulse/Rainbow) and by any custom effect a
--- developer registers. Returns a controller: { Stop = function() end }.
-local function startLoop(instance, interval, stepFn)
-    local running = true
-    task.spawn(function()
-        while running and instance.Parent do
-            stepFn()
-            task.wait(interval)
-        end
-    end)
-    local destroyedConn
-    local ok, signal = pcall(function() return instance.Destroying end)
-    if ok and signal then
-        destroyedConn = signal:Connect(function() running = false end)
-    end
-    return {
-        Stop = function()
-            running = false
-            if destroyedConn then destroyedConn:Disconnect() end
-        end,
-    }
-end
-
--- ===== BUILT-IN EFFECTS =====
--- Ready-made effects registered into Library.Effects (see the PLUGIN API
--- section near the bottom of the file for Library:RegisterEffect /
--- Library:ApplyEffect). Any GUI element instance can have these applied:
---
---   Library:ApplyEffect(myButton, "Glow", { Color = Color3.new(1,0,0) })
---   local pulse = Library:ApplyEffect(myButton, "Pulse")
---   pulse.Stop() -- later, to cancel a looping effect
---
--- config fields are all optional; sensible defaults are used.
-local BuiltInEffects = {}
-
--- Soft breathing outline around the element, in the accent color by
--- default. Looping — call Stop() to remove it.
-BuiltInEffects.Glow = function(instance, config)
-    local color = config.Color or Colors.Accent
-    local speed = config.Speed or 1.2
-    local glowStroke = Instance.new("UIStroke")
-    glowStroke.Color = color
-    glowStroke.Thickness = 1
-    glowStroke.Transparency = 0.4
-    glowStroke.Parent = instance
-
-    local goingUp = true
-    local controller = startLoop(instance, speed / 2, function()
-        goingUp = not goingUp
-        tween(glowStroke, {
-            Thickness = goingUp and 3 or 1,
-            Transparency = goingUp and 0 or 0.5,
-        }, speed / 2)
-    end)
-
-    local originalStop = controller.Stop
-    controller.Stop = function()
-        originalStop()
-        glowStroke:Destroy()
-    end
-    return controller
-end
-
--- Gentle up/down size breathing using a UIScale so it doesn't disturb
--- sibling layout. Looping — call Stop() to return to normal size.
-BuiltInEffects.Pulse = function(instance, config)
-    local minScale = config.MinScale or 1
-    local maxScale = config.MaxScale or 1.06
-    local speed = config.Speed or 0.6
-
-    local uiScale = Instance.new("UIScale")
-    uiScale.Scale = minScale
-    uiScale.Parent = instance
-
-    local goingUp = true
-    local controller = startLoop(instance, speed, function()
-        goingUp = not goingUp
-        tween(uiScale, { Scale = goingUp and maxScale or minScale }, speed)
-    end)
-
-    local originalStop = controller.Stop
-    controller.Stop = function()
-        originalStop()
-        tween(uiScale, { Scale = 1 }, 0.15)
-        task.delay(0.2, function() uiScale:Destroy() end)
-    end
-    return controller
-end
-
--- Continuously cycles the element's background through the color wheel.
--- Looping — call Stop() to restore the original color.
-BuiltInEffects.Rainbow = function(instance, config)
-    local speed = config.Speed or 0.05
-    local step = config.Step or 0.01
-    local original = instance.BackgroundColor3
-    local hue = 0
-
-    local controller = startLoop(instance, speed, function()
-        hue = (hue + step) % 1
-        instance.BackgroundColor3 = Color3.fromHSV(hue, 0.65, 1)
-    end)
-
-    local originalStop = controller.Stop
-    controller.Stop = function()
-        originalStop()
-        instance.BackgroundColor3 = original
-    end
-    return controller
-end
-
--- One-shot attention-getter: quickly shakes the element left/right then
--- settles back. Not looping — nothing to Stop().
-BuiltInEffects.Shake = function(instance, config)
-    local strength = config.Strength or 4
-    local original = instance.Position
-    local offsets = { strength, -strength, strength * 0.6, -strength * 0.6, 0 }
-    task.spawn(function()
-        for _, dx in ipairs(offsets) do
-            tween(instance, {
-                Position = UDim2.new(original.X.Scale, original.X.Offset + dx, original.Y.Scale, original.Y.Offset)
-            }, 0.05)
-            task.wait(0.05)
-        end
-    end)
-    return nil
-end
-
--- One-shot flash to a color (default: white) and back — handy as click
--- feedback on a custom button. Not looping — nothing to Stop().
-BuiltInEffects.Flash = function(instance, config)
-    local flashColor = config.Color or Color3.fromRGB(255, 255, 255)
-    local original = instance.BackgroundColor3
-    tween(instance, { BackgroundColor3 = flashColor }, 0.08)
-    task.delay(0.08, function()
-        tween(instance, { BackgroundColor3 = original }, 0.15)
-    end)
-    return nil
-end
-
-for name, fn in pairs(BuiltInEffects) do
-    Library.Effects[name] = fn
-end
-
--- ===== BUILT-IN BACKGROUND EFFECTS =====
--- These run behind ALL of a window's content (parented into a dedicated
--- layer sitting just above the plain window background and just below
--- the top bar / tabs / sections). Applied via:
---
---   Window:SetBackgroundEffect("Gradient", { ColorA = Color3.new(1,0,0) })
---   Window:ClearBackgroundEffect()
---
--- Since sections/panels have their own solid backgrounds, the effect
--- shows through the margins and gaps around them — a subtle animated
--- backdrop rather than something that fights with your content.
-local BuiltInBackgroundEffects = {}
-
--- Slowly rotating two-color gradient wash across the whole window.
-BuiltInBackgroundEffects.Gradient = function(layer, config)
-    local speed = config.Speed or 20 -- degrees per second
-    local colorA = config.ColorA or Colors.Accent
-    local colorB = config.ColorB or Color3.fromRGB(18, 18, 22)
-
-    local Fill = Instance.new("Frame")
-    Fill.Size = UDim2.new(1, 0, 1, 0)
-    Fill.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    Fill.BorderSizePixel = 0
-    Fill.ZIndex = layer.ZIndex
-    Fill.Parent = layer
-
-    local Gradient = Instance.new("UIGradient")
-    Gradient.Color = ColorSequence.new(colorA, colorB)
-    Gradient.Parent = Fill
-
-    local rotation = 0
-    local conn = RunService.Heartbeat:Connect(function(dt)
-        rotation = (rotation + speed * dt) % 360
-        Gradient.Rotation = rotation
-    end)
-
-    return {
-        Stop = function()
-            conn:Disconnect()
-            Fill:Destroy()
-        end,
-    }
-end
-
--- Twinkling starfield — small dots that quietly fade in and out.
-BuiltInBackgroundEffects.Stars = function(layer, config)
-    local count = config.Count or 30
-    local dots = {}
-
-    for _ = 1, count do
-        local star = Instance.new("Frame")
-        star.Size = UDim2.new(0, math.random(1, 3), 0, math.random(1, 3))
-        star.Position = UDim2.new(math.random(), 0, math.random(), 0)
-        star.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-        star.BackgroundTransparency = 0.3 + math.random() * 0.5
-        star.BorderSizePixel = 0
-        star.ZIndex = layer.ZIndex
-        star.Parent = layer
-        corner(star, 2)
-        table.insert(dots, star)
-    end
-
-    local running = true
-    task.spawn(function()
-        while running and layer.Parent do
-            for _, star in ipairs(dots) do
-                if not running then break end
-                tween(star, { BackgroundTransparency = 0.2 + math.random() * 0.7 }, 1 + math.random())
-            end
-            task.wait(1.5)
-        end
-    end)
-
-    return {
-        Stop = function()
-            running = false
-            for _, star in ipairs(dots) do star:Destroy() end
-        end,
-    }
-end
-
--- Soft particles that drift upward from the bottom of the window and
--- fade out near the top, endlessly respawning.
-BuiltInBackgroundEffects.Particles = function(layer, config)
-    local color = config.Color or Colors.Accent
-    local spawnEvery = config.SpawnEvery or 0.4
-    local running = true
-
-    task.spawn(function()
-        while running and layer.Parent do
-            task.spawn(function()
-                local p = Instance.new("Frame")
-                p.Size = UDim2.new(0, math.random(3, 6), 0, math.random(3, 6))
-                p.Position = UDim2.new(math.random(), 0, 1, 0)
-                p.BackgroundColor3 = color
-                p.BackgroundTransparency = 0.4
-                p.BorderSizePixel = 0
-                p.ZIndex = layer.ZIndex
-                p.Parent = layer
-                corner(p, 3)
-
-                local dur = 3 + math.random() * 3
-                tween(p, {
-                    Position = UDim2.new(p.Position.X.Scale, 0, -0.08, 0),
-                    BackgroundTransparency = 1,
-                }, dur)
-                task.wait(dur)
-                p:Destroy()
-            end)
-            task.wait(spawnEvery)
-        end
-    end)
-
-    return {
-        Stop = function()
-            running = false
-            for _, child in ipairs(layer:GetChildren()) do
-                if child:IsA("Frame") then child:Destroy() end
-            end
-        end,
-    }
-end
-
-for name, fn in pairs(BuiltInBackgroundEffects) do
-    Library.BackgroundEffects[name] = fn
 end
 
 -- ===== NOTIFICATION POSITION PRESETS =====
@@ -640,13 +356,8 @@ local function buildSection(container, orderState, name)
 
     -- ===== BUTTON =====
     -- callback()
-    -- options (optional): { Icon = "rbxassetid://..." } to put an image on
-    -- the button — e.g. AddButton("Pet the cat", callback, { Icon = "rbxassetid://123456789" }).
-    -- For icons on other element types, or fancier placement/size, use the
-    -- more general Library:AttachIcon(instance, imageId, config) instead.
-    function SectionObj:AddButton(text, callback, options)
+    function SectionObj:AddButton(text, callback)
         callback = callback or function() end
-        options = options or {}
         self._order = self._order + 1
 
         local Btn = Instance.new("TextButton")
@@ -659,20 +370,6 @@ local function buildSection(container, orderState, name)
         Btn.TextSize = 13
         Btn.Parent = Section
         corner(Btn, 6)
-
-        if options.Icon then
-            -- Shift the text right to make room, then place the icon in
-            -- that reserved space on the left.
-            Btn.TextXAlignment = Enum.TextXAlignment.Center
-            local IconPadding = Instance.new("UIPadding")
-            IconPadding.PaddingLeft = UDim.new(0, 26)
-            IconPadding.Parent = Btn
-            Library:AttachIcon(Btn, options.Icon, {
-                Size = UDim2.new(0, 20, 0, 20),
-                Position = UDim2.new(0, 6, 0.5, -10),
-                ZIndex = Btn.ZIndex + 1,
-            })
-        end
 
         Btn.MouseButton1Click:Connect(function()
             local a = Colors.Accent
@@ -1040,77 +737,6 @@ local function buildSection(container, orderState, name)
         }
     end
 
-    -- ===== CUSTOM ELEMENT (escape hatch for other developers) =====
-    -- Lets any script build a fully custom element inside this section —
-    -- a custom button, a mini leaderboard, anything — using the same
-    -- visual primitives and live theme the built-in elements use.
-    --
-    -- builder(container, helpers) runs immediately. `container` is an
-    -- empty Frame already parented + correctly ordered inside the
-    -- section (pass `height` for a fixed height, or omit it to
-    -- auto-size to whatever you put inside). `helpers` exposes:
-    --   Tween(obj, props, time), Corner(parent, radius), Stroke(parent, color, thickness),
-    --   Theme (static colors), Colors (Colors.Accent, live), OnAccentChanged(fn),
-    --   ApplyEffect(instance, name, config)
-    --
-    -- Whatever `builder` returns is returned by AddCustom — by
-    -- convention a { Set = ..., Get = ... } table like the built-ins,
-    -- but it can be anything (a raw instance, a controller, nil, etc).
-    --
-    -- Example — a custom button with a hover glow:
-    --   Section:AddCustom(function(container, ui)
-    --       local btn = Instance.new("TextButton")
-    --       btn.Size = UDim2.new(1, 0, 1, 0)
-    --       btn.Text = "Do The Thing"
-    --       btn.BackgroundColor3 = ui.Colors.Accent
-    --       btn.Parent = container
-    --       ui.Corner(btn, 6)
-    --       btn.MouseButton1Click:Connect(function()
-    --           ui.ApplyEffect(btn, "Flash")
-    --           print("Custom button clicked!")
-    --       end)
-    --   end, 30)
-    function SectionObj:AddCustom(builder, height)
-        builder = builder or function() end
-        self._order = self._order + 1
-
-        local Container = Instance.new("Frame")
-        Container.LayoutOrder = self._order
-        Container.BackgroundTransparency = 1
-        Container.Size = UDim2.new(1, 0, 0, height or 0)
-        if not height then
-            Container.AutomaticSize = Enum.AutomaticSize.Y
-        end
-        Container.Parent = Section
-
-        local helpers = {
-            Tween = tween,
-            Corner = corner,
-            Stroke = stroke,
-            Theme = Theme,
-            Colors = Colors,
-            OnAccentChanged = onAccentChanged,
-            ApplyEffect = function(instance, name, config)
-                return Library:ApplyEffect(instance, name, config)
-            end,
-        }
-
-        return builder(Container, helpers) or Container
-    end
-
-    -- Auto-attach any element types other scripts registered via
-    -- Library:RegisterElementType(name, builderFn) — this gives every
-    -- section a brand-new Section:AddXxx(...) method, defined entirely
-    -- outside this file, without needing to touch this library's source.
-    for typeName, elementBuilder in pairs(Library.CustomElementTypes) do
-        if SectionObj[typeName] == nil then
-            SectionObj[typeName] = function(self, ...)
-                self._order = self._order + 1
-                return elementBuilder(Section, self._order, self, ...)
-            end
-        end
-    end
-
     return SectionObj
 end
 
@@ -1146,22 +772,6 @@ function Library:CreateWindow(config)
     Main.Parent = ScreenGui
     corner(Main, 10)
     stroke(Main, Theme.Stroke, 1)
-
-    -- Background effects layer: sits just above Main's flat background
-    -- color and just below the top bar / tabs / sections (ZIndex 0 vs.
-    -- their default of 1, and this requires the Global ZIndexBehavior
-    -- already set on ScreenGui above). Empty by default — populated by
-    -- Window:SetBackgroundEffect(name, config). Shows through the
-    -- window's margins and gaps since sections/panels are opaque.
-    local BackgroundLayer = Instance.new("Frame")
-    BackgroundLayer.Name = "BackgroundLayer"
-    BackgroundLayer.Size = UDim2.new(1, 0, 1, 0)
-    BackgroundLayer.BackgroundTransparency = 1
-    BackgroundLayer.BorderSizePixel = 0
-    BackgroundLayer.ZIndex = 0
-    BackgroundLayer.ClipsDescendants = true
-    BackgroundLayer.Parent = Main
-    corner(BackgroundLayer, 10)
 
     -- Top bar (draggable)
     local TOPBAR_HEIGHT = subtitle ~= "" and 58 or 46
@@ -1324,7 +934,6 @@ function Library:CreateWindow(config)
     local Window = setmetatable({
         ScreenGui = ScreenGui,
         Main = Main,
-        BackgroundLayer = BackgroundLayer,
         TabBar = TabBar,
         ContentHolder = ContentHolder,
         NotifyHolder = NotifyHolder,
@@ -1335,8 +944,6 @@ function Library:CreateWindow(config)
         _activeTab = nil,
         _notifyOrder = 0,
         _notificationsEnabled = true,
-        _bgEffectController = nil,
-        _bgEffectName = nil,
     }, Library)
 
     Window:SetNotifyPosition(DEFAULT_NOTIFY_POSITION)
@@ -1355,30 +962,6 @@ function Library:CreateWindow(config)
     local AppearanceSection = SettingsTab:CreateSection("Appearance")
     AppearanceSection:AddColorPicker("UI Color", Theme.Accent, function(color)
         Window:SetAccentColor(color)
-    end)
-
-    -- Background effect names shown here always reflect whatever is
-    -- currently registered, so custom effects added via
-    -- Library:RegisterBackgroundEffect(...) show up automatically too.
-    local function getBackgroundEffectNames()
-        local names = { "None" }
-        for effectName in pairs(Window.BackgroundEffects) do
-            table.insert(names, effectName)
-        end
-        table.sort(names, function(a, b)
-            if a == "None" then return true end
-            if b == "None" then return false end
-            return a < b
-        end)
-        return names
-    end
-
-    AppearanceSection:AddDropdown("Background Effect", getBackgroundEffectNames(), "None", function(selected)
-        if selected == "None" then
-            Window:ClearBackgroundEffect()
-        else
-            Window:SetBackgroundEffect(selected)
-        end
     end)
 
     return Window
@@ -1507,39 +1090,6 @@ end
 -- "Enable Notifications" toggle in the built-in Settings tab.
 function Library:SetNotificationsEnabled(enabled)
     self._notificationsEnabled = enabled
-end
-
--- ===== BACKGROUND EFFECTS =====
--- Window:SetBackgroundEffect("Gradient" | "Stars" | "Particles" | <your
--- own registered name>, config) — runs a whole-window background effect
--- behind all the tabs/sections. Calling this again swaps to a new effect
--- (the old one is stopped and cleaned up first). config is optional and
--- passed straight through to the effect (see each BuiltInBackgroundEffects
--- entry above for what it accepts).
-function Library:SetBackgroundEffect(name, config)
-    self:ClearBackgroundEffect()
-    local fn = self.BackgroundEffects[name]
-    if not fn then
-        warn("[CustomGUI] Unknown background effect: " .. tostring(name))
-        return
-    end
-    local ok, controller = pcall(fn, self.BackgroundLayer, config or {})
-    if not ok then
-        warn("[CustomGUI] Background effect '" .. tostring(name) .. "' errored: " .. tostring(controller))
-        return
-    end
-    self._bgEffectController = controller
-    self._bgEffectName = name
-end
-
--- Window:ClearBackgroundEffect() — stops whatever background effect is
--- currently running (safe to call even if none is active).
-function Library:ClearBackgroundEffect()
-    if self._bgEffectController and self._bgEffectController.Stop then
-        self._bgEffectController.Stop()
-    end
-    self._bgEffectController = nil
-    self._bgEffectName = nil
 end
 
 -- ===== NOTIFICATIONS =====
@@ -1677,175 +1227,5 @@ function Library:Notify(a, b, c)
         Toast:Destroy()
     end)
 end
-
---[[
-    ===== PLUGIN API =====
-    The functions below are what let OTHER scripts extend this GUI without
-    ever editing this file — register new visual effects, register
-    brand-new element types that show up as Section:AddXxx(...), or drop
-    in one-off custom UI via Section:AddCustom(...) (defined above, next
-    to the other Section:AddYyy methods).
-
-    QUICK REFERENCE
-    ----------------
-    Library:RegisterEffect(name, applyFn)
-        applyFn(instance, config) -> controller (or nil for one-shot effects)
-        Registers a new effect usable via Library:ApplyEffect(...).
-
-    Library:ApplyEffect(instance, name, config)
-        Runs effect `name` on any Instance (built-in element or your own).
-        Returns whatever applyFn returned — for looping effects, that's a
-        { Stop = function() end } controller.
-
-    Library:RegisterElementType(name, builderFn)
-        builderFn(Section, order, self, ...) -> anything
-        Registers a brand-new element type. After calling this, EVERY
-        section (existing or created later) gets a Section:AddName(...)
-        method that runs your builder, parented + ordered correctly.
-
-    Library.Utils
-        Exposes tween/corner/stroke/Theme/onAccentChanged for scripts that
-        want to build totally standalone UI (not inside a section) that
-        still matches this library's look and reacts to accent changes.
-
-    EXAMPLE — a whole new effect:
-        Library:RegisterEffect("Wobble", function(instance, config)
-            local strength = config.Strength or 3
-            local original = instance.Rotation
-            local going = true
-            task.spawn(function()
-                while going and instance.Parent do
-                    Library.Utils.Tween(instance, { Rotation = strength }, 0.15)
-                    task.wait(0.15)
-                    Library.Utils.Tween(instance, { Rotation = -strength }, 0.15)
-                    task.wait(0.15)
-                end
-            end)
-            return { Stop = function()
-                going = false
-                instance.Rotation = original
-            end }
-        end)
-
-    EXAMPLE — a whole new element type ("AddLabel"):
-        Library:RegisterElementType("Label", function(Section, order, self, text)
-            local Lbl = Instance.new("TextLabel")
-            Lbl.LayoutOrder = order
-            Lbl.Size = UDim2.new(1, 0, 0, 18)
-            Lbl.BackgroundTransparency = 1
-            Lbl.Font = Enum.Font.Gotham
-            Lbl.TextColor3 = Library.Utils.Theme.SubText
-            Lbl.TextXAlignment = Enum.TextXAlignment.Left
-            Lbl.TextSize = 12
-            Lbl.Text = text
-            Lbl.Parent = Section
-            return Lbl
-        end)
-        -- now every section can do: MySection:AddLabel("Some note here")
-
-    EXAMPLE — a one-off custom button with a hover glow, no registration
-    needed (see Section:AddCustom's own doc comment above for more):
-        MySection:AddCustom(function(container, ui)
-            local btn = Instance.new("TextButton")
-            btn.Size = UDim2.new(1, 0, 1, 0)
-            btn.Text = "Do The Thing"
-            btn.BackgroundColor3 = ui.Colors.Accent
-            btn.Parent = container
-            ui.Corner(btn, 6)
-            local glow
-            btn.MouseEnter:Connect(function() glow = ui.ApplyEffect(btn, "Glow") end)
-            btn.MouseLeave:Connect(function() if glow then glow.Stop() end end)
-            btn.MouseButton1Click:Connect(function()
-                ui.ApplyEffect(btn, "Flash")
-            end)
-        end, 30)
-]]
-
-function Library:RegisterEffect(name, applyFn)
-    assert(type(name) == "string" and name ~= "", "Effect name must be a non-empty string")
-    assert(type(applyFn) == "function", "Effect apply function must be a function")
-    self.Effects[name] = applyFn
-end
-
--- Registers a new whole-window background effect, usable via
--- Window:SetBackgroundEffect(name, config). applyFn(backgroundLayer, config)
--- should build into `backgroundLayer` and return a { Stop = function() end }
--- controller for cleanup (SetBackgroundEffect/ClearBackgroundEffect call it
--- automatically when swapping or clearing effects).
-function Library:RegisterBackgroundEffect(name, applyFn)
-    assert(type(name) == "string" and name ~= "", "Background effect name must be a non-empty string")
-    assert(type(applyFn) == "function", "Background effect apply function must be a function")
-    self.BackgroundEffects[name] = applyFn
-end
-
-function Library:ApplyEffect(instance, name, config)
-    local fn = self.Effects[name]
-    if not fn then
-        warn("[CustomGUI] Unknown effect: " .. tostring(name))
-        return nil
-    end
-    local ok, result = pcall(fn, instance, config or {})
-    if not ok then
-        warn("[CustomGUI] Effect '" .. tostring(name) .. "' errored: " .. tostring(result))
-        return nil
-    end
-    return result
-end
-
--- ===== ICONS =====
--- Puts an image (an icon, a little cat picture, whatever asset you want)
--- on top of ANY GUI element — a button, a toggle, a custom element, the
--- window's TopBar, literally any Instance. Works with a Roblox asset id
--- string ("rbxassetid://123456789") or an already-uploaded image asset.
---
---   local cat = Library:AttachIcon(myButton, "rbxassetid://123456789", {
---       Size = UDim2.new(0, 24, 0, 24),
---       Position = UDim2.new(1, -28, 0.5, -12), -- top-right-ish corner badge
---   })
---   cat:Destroy() -- remove it later if you want
---
--- config (all optional):
---   Size       UDim2, default 20x20
---   Position   UDim2, default a small badge in the top-right corner
---   AnchorPoint Vector2, default (0, 0)
---   Rotation   number in degrees, default 0
---   ZIndex     number, default one above the target instance's ZIndex
-function Library:AttachIcon(instance, imageId, config)
-    config = config or {}
-    local icon = Instance.new("ImageLabel")
-    icon.Name = "Icon"
-    icon.Image = imageId
-    icon.BackgroundTransparency = 1
-    icon.ScaleType = Enum.ScaleType.Fit
-    icon.Size = config.Size or UDim2.new(0, 20, 0, 20)
-    icon.Position = config.Position or UDim2.new(1, -24, 0, 4)
-    icon.AnchorPoint = config.AnchorPoint or Vector2.new(0, 0)
-    icon.Rotation = config.Rotation or 0
-    icon.ZIndex = config.ZIndex or ((instance.ZIndex or 1) + 1)
-    icon.Parent = instance
-    return icon
-end
-
-function Library:RegisterElementType(name, builderFn)
-    assert(type(name) == "string" and name ~= "", "Element type name must be a non-empty string")
-    assert(type(builderFn) == "function", "Element type builder must be a function")
-    self.CustomElementTypes[name] = builderFn
-end
-
--- Read-only-by-convention grab bag of internals for scripts building
--- fully standalone UI outside of any section (e.g. inside your own
--- ScreenGui) that still wants to look consistent and react live to
--- accent color changes.
-Library.Utils = {
-    Tween = tween,
-    Corner = corner,
-    Stroke = stroke,
-    Theme = Theme,
-    OnAccentChanged = onAccentChanged,
-}
--- Colors is exposed via a function (not a direct field) since Colors.Accent
--- is mutated in place by SetAccentColor — this guarantees callers always
--- read the current table rather than a stale reference.
-Library.Utils.GetColors = function() return Colors end
 
 return Library
