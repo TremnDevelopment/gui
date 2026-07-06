@@ -236,7 +236,7 @@ local function buildSection(container, orderState, name)
         end)
 
         if default then
-            callback(true)
+            task.spawn(callback, true)
         end
 
         return {
