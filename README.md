@@ -23,11 +23,10 @@ A lightweight, dependency-free Roblox Lua GUI library for building settings-styl
 
 ## Installation
 
-1. Copy `CustomGUI.lua` into a **ModuleScript** in `ReplicatedStorage`, and name it `CustomGUI`.
-2. In a **LocalScript** (e.g. under `StarterPlayerScripts`), require it:
+1. Copy the lua below and paste into your executor
 
 ```lua
-local Library = require(game:GetService("ReplicatedStorage"):WaitForChild("CustomGUI"))
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/TremnDevelopment/gui/refs/heads/main/Framework", true))()
 ```
 
 3. Build your window (see [Quick Start](#quick-start) below).
