@@ -293,29 +293,44 @@ function Library:Notify(a, b, c)
     AccentBar.Size = UDim2.new(0, 4, 1, 0)
     AccentBar.BackgroundColor3 = accentColor
     AccentBar.BorderSizePixel = 0
+    AccentBar.ZIndex = 2
     AccentBar.Parent = Toast
     corner(AccentBar, 2)
+
+    -- Content holder: everything (title + text) stacks inside this via UIListLayout,
+    -- so the frame's AutomaticSize can correctly measure wrapped text height.
+    local Content = Instance.new("Frame")
+    Content.BackgroundTransparency = 1
+    Content.Size = UDim2.new(1, 0, 0, 0)
+    Content.AutomaticSize = Enum.AutomaticSize.Y
+    Content.Parent = Toast
 
     local Padding = Instance.new("UIPadding")
     Padding.PaddingTop = UDim.new(0, 10)
     Padding.PaddingBottom = UDim.new(0, 10)
     Padding.PaddingLeft = UDim.new(0, 16)
     Padding.PaddingRight = UDim.new(0, 12)
-    Padding.Parent = Toast
+    Padding.Parent = Content
+
+    local ContentLayout = Instance.new("UIListLayout")
+    ContentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    ContentLayout.Padding = UDim.new(0, 2)
+    ContentLayout.Parent = Content
 
     local TitleLabel = Instance.new("TextLabel")
+    TitleLabel.LayoutOrder = 1
     TitleLabel.BackgroundTransparency = 1
-    TitleLabel.Size = UDim2.new(1, 0, 0, 18)
+    TitleLabel.Size = UDim2.new(1, 0, 0, 16)
     TitleLabel.Font = Enum.Font.GothamBold
     TitleLabel.Text = title
     TitleLabel.TextColor3 = Theme.Text
     TitleLabel.TextSize = 13
     TitleLabel.TextXAlignment = Enum.TextXAlignment.Left
-    TitleLabel.Parent = Toast
+    TitleLabel.Parent = Content
 
     local TextLabel = Instance.new("TextLabel")
+    TextLabel.LayoutOrder = 2
     TextLabel.BackgroundTransparency = 1
-    TextLabel.Position = UDim2.new(0, 0, 0, 18)
     TextLabel.Size = UDim2.new(1, 0, 0, 0)
     TextLabel.AutomaticSize = Enum.AutomaticSize.Y
     TextLabel.Font = Enum.Font.Gotham
@@ -324,7 +339,7 @@ function Library:Notify(a, b, c)
     TextLabel.TextSize = 12
     TextLabel.TextWrapped = true
     TextLabel.TextXAlignment = Enum.TextXAlignment.Left
-    TextLabel.Parent = Toast
+    TextLabel.Parent = Content
 
     -- Slide in from the right + fade in
     Toast.Position = UDim2.new(1, 40, 0, 0)
