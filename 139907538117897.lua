@@ -1,4 +1,4 @@
-local Framework = loadstring(game:HttpGet("https://raw.githubusercontent.com/TremnDevelopment/gui/refs/heads/main/Framework", true))()
+local Framework = loadstring(game:HttpGet("https://raw.githubusercontent.com/TremnDevelopment/gui/refs/heads/main/Framework.lua", true))()
 
 local Window = Framework:CreateWindow({
     Title = "Framework Showcase",
